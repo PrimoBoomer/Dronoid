@@ -1,0 +1,88 @@
+name: client
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.6.2
+  GODOT_STATUS: stable
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: "Windows Desktop"
+            artifact: windows
+            output: build/windows/Dronoid.exe
+          - preset: "Linux"
+            artifact: linux
+            output: build/linux/Dronoid.x86_64
+          - preset: "macOS"
+            artifact: macos
+            output: build/macos/Dronoid.zip
+          - preset: "Web"
+            artifact: web
+            output: build/web/index.html
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip ca-certificates fontconfig
+
+      - name: Cache Godot binary and templates
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+
+      - name: Download Godot ${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot
+          GODOT_REL="${GODOT_VERSION}-${GODOT_STATUS}"
+          wget -q -O /tmp/godot.zip \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_REL}/Godot_v${GODOT_REL}_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_REL}_linux.x86_64 ~/godot/godot
+          chmod +x ~/godot/godot
+
+          wget -q -O /tmp/templates.tpz \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_REL}/Godot_v${GODOT_REL}_export_templates.tpz"
+          mkdir -p ~/.local/share/godot/export_templates
+          unzip -q /tmp/templates.tpz -d /tmp/tpl
+          mv /tmp/tpl/templates ~/.local/share/godot/export_templates/${GODOT_REL}
+
+      - name: Make Godot available on PATH
+        run: |
+          echo "$HOME/godot" >> $GITHUB_PATH
+
+      - name: Import project
+        working-directory: client
+        run: |
+          godot --headless --import || true
+          godot --headless --import
+
+      - name: Export "${{ matrix.preset }}"
+        working-directory: client
+        run: |
+          mkdir -p "$(dirname ../${{ matrix.output }})"
+          godot --headless --export-release "${{ matrix.preset }}" "../${{ matrix.output }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dronoid-${{ matrix.artifact }}
+          path: build/${{ matrix.artifact }}/
+          if-no-files-found: error

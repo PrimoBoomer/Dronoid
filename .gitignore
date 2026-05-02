@@ -1,0 +1,27 @@
+.claude/
+
+# Godot
+client/.godot/
+client/addons/
+client/.import/
+*.import.tmp
+client/export.cfg
+build/
+
+# Rust
+server/target/
+**/*.rs.bk
+
+# SQLite (galaxy DBs are local state, never commit)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+*.bak*

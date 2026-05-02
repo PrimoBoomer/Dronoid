@@ -1,0 +1,61 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/connect_ui.gd" id="1_connect"]
+
+[node name="Connect" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_connect")
+
+[node name="Background" type="ColorRect" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.04, 0.06, 0.10, 1.0)
+
+[node name="Center" type="CenterContainer" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+custom_minimum_size = Vector2(420, 0)
+
+[node name="Margin" type="MarginContainer" parent="Center/Panel"]
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="Box" type="VBoxContainer" parent="Center/Panel/Margin"]
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Center/Panel/Margin/Box"]
+text = "Dronoid"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 32
+
+[node name="Subtitle" type="Label" parent="Center/Panel/Margin/Box"]
+text = "Connexion au serveur"
+horizontal_alignment = 1
+theme_override_colors/font_color = Color(0.65, 0.75, 0.85, 1.0)
+
+[node name="Sep1" type="HSeparator" parent="Center/Panel/Margin/Box"]
+
+[node name="UrlLabel" type="Label" parent="Center/Panel/Margin/Box"]
+text = "Serveur"
+
+[node name="UrlEdit" type="LineEdit" parent="Center/Panel/Margin/Box"]
+text = "ws://127.0.0.1:8080"
+
+[node name="NameLabel" type="Label" parent="Center/Panel/Margin/Box"]
+text = "Pseudo"
+
+[node name="NameEdit" type="LineEdit" parent="Center/Panel/Margin/Box"]
+placeholder_text = "pseudo"
+
+[node name="Sep2" type="HSeparator" parent="Center/Panel/Margin/Box"]
+
+[node name="ConnectBtn" type="Button" parent="Center/Panel/Margin/Box"]
+text = "Connect"
+
+[node name="StatusLabel" type="Label" parent="Center/Panel/Margin/Box"]
+horizontal_alignment = 1

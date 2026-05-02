@@ -1,0 +1,39 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/play.gd" id="1_play"]
+[ext_resource type="Mesh" path="res://assets/ship.obj" id="2_ship"]
+
+[sub_resource type="Environment" id="Env_space"]
+background_mode = 1
+background_color = Color(0.015, 0.02, 0.05, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.35, 0.42, 0.6, 1)
+ambient_light_energy = 0.45
+
+[sub_resource type="StandardMaterial3D" id="Mat_ship"]
+albedo_color = Color(0.6, 0.7, 0.85, 1)
+metallic = 0.4
+roughness = 0.35
+
+[node name="Play" type="Node3D"]
+script = ExtResource("1_play")
+
+[node name="WorldEnv" type="WorldEnvironment" parent="."]
+environment = SubResource("Env_space")
+
+[node name="Ship" type="Node3D" parent="."]
+
+[node name="Mesh" type="MeshInstance3D" parent="Ship"]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
+mesh = ExtResource("2_ship")
+material_override = SubResource("Mat_ship")
+
+[node name="ChaseCam" type="Camera3D" parent="."]
+current = true
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Status" type="Label" parent="UI"]
+offset_left = 16.0
+offset_top = 16.0
+text = ""
