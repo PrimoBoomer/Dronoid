@@ -53,6 +53,7 @@ const MINE_INTERVAL_MS: int = 150
 const PICK_TOLERANCE: float = 1.5
 const AUTOPILOT_TURN_RATE: float = 1.6
 const AUTOPILOT_BRAKE_SAFETY: float = 1.2
+const AUTOPILOT_CANCEL_MOUSE: float = 80.0
 
 var _alt_held: bool = false
 var _last_mine_ms: int = 0
@@ -65,6 +66,7 @@ var _action_target_idx: int = -1
 var _action_target_node: Node3D = null
 var _action_stop_distance: float = 0.0
 var _action_pending_mine: bool = false
+var _autopilot_mouse_accum: float = 0.0
 var _mining: bool = false
 var _current_target_idx: int = -1
 
@@ -500,6 +502,10 @@ func _input(event: InputEvent) -> void:
 		var rel: Vector2 = (event as InputEventMouseMotion).relative
 		_ship.rotate_object_local(Vector3.UP, -rel.x * mouse_sensitivity)
 		_ship.rotate_object_local(Vector3.RIGHT, -rel.y * mouse_sensitivity)
+		if _action_kind == "navigate":
+			_autopilot_mouse_accum += rel.length()
+			if _autopilot_mouse_accum >= AUTOPILOT_CANCEL_MOUSE:
+				_cancel_autopilot()
 
 func _process(delta: float) -> void:
 	var alt_now := Input.is_key_pressed(KEY_ALT)
@@ -553,8 +559,10 @@ func _pick_target(t: float, max_range: float = MAX_MINE_RANGE) -> int:
 	var ray_dir := _cam.project_ray_normal(mouse_pos)
 
 	var ship_pos := _ship.global_position
-	var best_idx: int = -1
-	var best_dist_along: float = INF
+	var best_exact_idx: int = -1
+	var best_exact_along: float = INF
+	var best_tol_idx: int = -1
+	var best_tol_along: float = INF
 	var n: int = _belt_mm.instance_count
 	for i in n:
 		if _belt_alive[i] == 0:
@@ -567,11 +575,16 @@ func _pick_target(t: float, max_range: float = MAX_MINE_RANGE) -> int:
 		if along <= 0.0:
 			continue
 		var perp := (to_pt - ray_dir * along).length()
-		var pick_radius: float = _belt_scales[i] * PICK_TOLERANCE
-		if perp <= pick_radius and along < best_dist_along:
-			best_dist_along = along
-			best_idx = i
-	return best_idx
+		var radius: float = _belt_scales[i]
+		if perp <= radius:
+			if along < best_exact_along:
+				best_exact_along = along
+				best_exact_idx = i
+		elif perp <= radius * PICK_TOLERANCE:
+			if along < best_tol_along:
+				best_tol_along = along
+				best_tol_idx = i
+	return best_exact_idx if best_exact_idx >= 0 else best_tol_idx
 
 func _update_camera(delta: float) -> void:
 	var ideal := _ideal_cam_transform()
@@ -606,6 +619,13 @@ func _get_action_target_pos(t: float) -> Vector3:
 	if _action_target_node != null:
 		return _action_target_node.global_position
 	return _ship.global_position
+
+func _cancel_autopilot() -> void:
+	_action_kind = ""
+	_action_target_kind = ""
+	_action_target_node = null
+	_action_pending_mine = false
+	_autopilot_mouse_accum = 0.0
 
 func _autopilot_process(delta: float) -> void:
 	var t := float(Net.server_now_ms() - _epoch_ms) / 1000.0
@@ -645,20 +665,25 @@ func _physics_process(delta: float) -> void:
 	if _paused:
 		return
 	if _action_kind == "navigate":
-		_autopilot_process(delta)
-	else:
-		var thrusting := _captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-		var fwd: Vector3 = -_ship.transform.basis.z
-		if thrusting:
-			_velocity += fwd * thrust_accel * delta
-			var sp := _velocity.length()
-			if sp > max_speed:
-				_velocity = _velocity * (max_speed / sp)
+		if _captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_cancel_autopilot()
 		else:
-			var sp := _velocity.length()
-			if sp > 0.0:
-				var new_sp: float = max(sp - brake_decel * delta, 0.0)
-				_velocity = _velocity * (new_sp / sp)
+			_autopilot_process(delta)
+			_ship.position += _velocity * delta
+			_ship.transform = _ship.transform.orthonormalized()
+			return
+	var thrusting := _captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	var fwd: Vector3 = -_ship.transform.basis.z
+	if thrusting:
+		_velocity += fwd * thrust_accel * delta
+		var sp := _velocity.length()
+		if sp > max_speed:
+			_velocity = _velocity * (max_speed / sp)
+	else:
+		var sp := _velocity.length()
+		if sp > 0.0:
+			var new_sp: float = max(sp - brake_decel * delta, 0.0)
+			_velocity = _velocity * (new_sp / sp)
 	_ship.position += _velocity * delta
 	_ship.transform = _ship.transform.orthonormalized()
 
@@ -795,8 +820,10 @@ func _pick_static_target() -> int:
 	var mouse_pos := get_viewport().get_mouse_position()
 	var ray_origin := _cam.project_ray_origin(mouse_pos)
 	var ray_dir    := _cam.project_ray_normal(mouse_pos)
-	var best_idx := -1
-	var best_along := INF
+	var best_exact_idx := -1
+	var best_exact_along := INF
+	var best_tol_idx := -1
+	var best_tol_along := INF
 	for i in _pickable_static.size():
 		var entry: Dictionary = _pickable_static[i]
 		var node: Node3D = entry["node"]
@@ -805,10 +832,16 @@ func _pick_static_target() -> int:
 		if along <= 0.0:
 			continue
 		var perp := (to_obj - ray_dir * along).length()
-		if perp <= (entry["radius_visual"] as float) * PICK_TOLERANCE and along < best_along:
-			best_along = along
-			best_idx = i
-	return best_idx
+		var radius: float = entry["radius_visual"] as float
+		if perp <= radius:
+			if along < best_exact_along:
+				best_exact_along = along
+				best_exact_idx = i
+		elif perp <= radius * PICK_TOLERANCE:
+			if along < best_tol_along:
+				best_tol_along = along
+				best_tol_idx = i
+	return best_exact_idx if best_exact_idx >= 0 else best_tol_idx
 
 func _is_hovering() -> bool:
 	return _hover_target_kind != ""
@@ -931,6 +964,7 @@ func _close_context_menu() -> void:
 
 func _on_ctx_navigate() -> void:
 	_close_context_menu()
+	_autopilot_mouse_accum = 0.0
 	_action_kind        = "navigate"
 	_action_target_kind = _ctx_target_kind
 	_action_target_idx  = _ctx_target_idx
@@ -941,6 +975,7 @@ func _on_ctx_navigate() -> void:
 
 func _on_ctx_mine() -> void:
 	_close_context_menu()
+	_autopilot_mouse_accum = 0.0
 	_action_kind        = "navigate"
 	_action_target_kind = _ctx_target_kind
 	_action_target_idx  = _ctx_target_idx

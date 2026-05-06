@@ -62,7 +62,7 @@ jobs:
             "https://github.com/godotengine/godot-builds/releases/download/${GODOT_REL}/Godot_v${GODOT_REL}_export_templates.tpz"
           mkdir -p ~/.local/share/godot/export_templates
           unzip -q /tmp/templates.tpz -d /tmp/tpl
-          mv /tmp/tpl/templates ~/.local/share/godot/export_templates/${GODOT_REL}
+          mv /tmp/tpl/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}
 
       - name: Make Godot available on PATH
         run: |

@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 Net="*res://scripts/net_client.gd"
+SkyBackground="*res://scripts/sky_background.gd"
 
 [display]
 
