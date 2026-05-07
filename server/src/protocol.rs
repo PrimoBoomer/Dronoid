@@ -25,6 +25,11 @@ pub enum ClientMsg {
     },
     OrderAllDrones {
         order: String,
+        #[serde(default)]
+        kind: Option<String>,
+    },
+    Cheat {
+        action: String,
     },
 }
 

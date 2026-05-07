@@ -134,8 +134,14 @@ func send_build(item: String) -> bool:
 func send_order_drone(drone_id: int, order: String) -> bool:
 	return send_msg({"type": "order_drone", "drone_id": drone_id, "order": order})
 
-func send_order_all_drones(order: String) -> bool:
-	return send_msg({"type": "order_all_drones", "order": order})
+func send_order_all_drones(order: String, kind: String = "") -> bool:
+	var msg := {"type": "order_all_drones", "order": order}
+	if not kind.is_empty():
+		msg["kind"] = kind
+	return send_msg(msg)
+
+func send_cheat(action: String) -> bool:
+	return send_msg({"type": "cheat", "action": action})
 
 func server_now_ms() -> int:
 	var local_ms := int(Time.get_unix_time_from_system() * 1000.0)

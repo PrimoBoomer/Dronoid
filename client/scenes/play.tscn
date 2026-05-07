@@ -32,8 +32,3 @@ material_override = SubResource("Mat_ship")
 current = true
 
 [node name="UI" type="CanvasLayer" parent="."]
-
-[node name="Status" type="Label" parent="UI"]
-offset_left = 16.0
-offset_top = 16.0
-text = ""

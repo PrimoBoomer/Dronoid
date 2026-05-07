@@ -10,11 +10,11 @@ use crate::world::gen::{
 };
 use crate::world::types::{
     Asteroid, AsteroidKind, BlackHole, Drone, Factory, Inventory, SolarSystem, StarLite,
-    DRONE_COST, DRONE_FORMATION_HEIGHT, DRONE_FORMATION_RADIUS, DRONE_MINE_AMOUNT,
+    DRONE_ACCEL, DRONE_COST, DRONE_FORMATION_HEIGHT, DRONE_FORMATION_RADIUS, DRONE_MINE_AMOUNT,
     DRONE_MINE_INTERVAL_MS, DRONE_MINE_RANGE, DRONE_RETURN_TOLERANCE, DRONE_SPEED, FACTORY_COST,
 };
 
-const SCHEMA_VERSION: &str = "5";
+const SCHEMA_VERSION: &str = "6";
 const BLACK_HOLE_RADIUS: f32 = 200.0;
 const BLACK_HOLE_COLOR: [f32; 3] = [0.05, 0.0, 0.08];
 
@@ -72,6 +72,9 @@ pub fn open(path: &Path) -> Result<Db> {
             tracing::info!("migrating schema v4 -> v5");
             migrate_v4_to_v5(&conn)?;
             tracing::info!("migration v4 -> v5 done");
+            tracing::info!("migrating schema v5 -> v6");
+            migrate_v5_to_v6(&conn)?;
+            tracing::info!("migration v5 -> v6 done");
         } else if v == "3" {
             tracing::info!("migrating schema v3 -> v4");
             migrate_v3_to_v4(&conn)?;
@@ -79,10 +82,20 @@ pub fn open(path: &Path) -> Result<Db> {
             tracing::info!("migrating schema v4 -> v5");
             migrate_v4_to_v5(&conn)?;
             tracing::info!("migration v4 -> v5 done");
+            tracing::info!("migrating schema v5 -> v6");
+            migrate_v5_to_v6(&conn)?;
+            tracing::info!("migration v5 -> v6 done");
         } else if v == "4" {
             tracing::info!("migrating schema v4 -> v5");
             migrate_v4_to_v5(&conn)?;
             tracing::info!("migration v4 -> v5 done");
+            tracing::info!("migrating schema v5 -> v6");
+            migrate_v5_to_v6(&conn)?;
+            tracing::info!("migration v5 -> v6 done");
+        } else if v == "5" {
+            tracing::info!("migrating schema v5 -> v6");
+            migrate_v5_to_v6(&conn)?;
+            tracing::info!("migration v5 -> v6 done");
         } else if v != SCHEMA_VERSION {
             bail!(
                 "incompatible schema version (db={}, expected={}). Dev mode: delete galaxy.sqlite (and -shm/-wal) and restart.",
@@ -171,6 +184,9 @@ fn migrate_fresh(conn: &Connection) -> Result<()> {
             pos_x           REAL NOT NULL DEFAULT 0,
             pos_y           REAL NOT NULL DEFAULT 0,
             pos_z           REAL NOT NULL DEFAULT 0,
+            vel_x           REAL NOT NULL DEFAULT 0,
+            vel_y           REAL NOT NULL DEFAULT 0,
+            vel_z           REAL NOT NULL DEFAULT 0,
             state           TEXT NOT NULL DEFAULT 'idle',
             target_asteroid INTEGER NULL
         );
@@ -231,6 +247,21 @@ fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
     )?;
     conn.execute(
         "UPDATE meta SET value = '5' WHERE key = 'schema_version'",
+        [],
+    )?;
+    Ok(())
+}
+
+fn migrate_v5_to_v6(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        ALTER TABLE player_drones ADD COLUMN vel_x REAL NOT NULL DEFAULT 0;
+        ALTER TABLE player_drones ADD COLUMN vel_y REAL NOT NULL DEFAULT 0;
+        ALTER TABLE player_drones ADD COLUMN vel_z REAL NOT NULL DEFAULT 0;
+        "#,
+    )?;
+    conn.execute(
+        "UPDATE meta SET value = '6' WHERE key = 'schema_version'",
         [],
     )?;
     Ok(())
@@ -711,7 +742,7 @@ pub fn load_inventory(conn: &Connection, player_id: i64) -> Result<Inventory> {
 
 fn load_drones_tx(tx: &Transaction, player_id: i64) -> Result<Vec<Drone>> {
     let mut stmt = tx.prepare(
-        "SELECT id, kind, created_at, pos_x, pos_y, pos_z, state, target_asteroid \
+        "SELECT id, kind, created_at, pos_x, pos_y, pos_z, vel_x, vel_y, vel_z, state, target_asteroid \
          FROM player_drones WHERE player_id = ?1 ORDER BY id",
     )?;
     let rows = stmt.query_map(params![player_id], |r| {
@@ -720,8 +751,9 @@ fn load_drones_tx(tx: &Transaction, player_id: i64) -> Result<Vec<Drone>> {
             kind: r.get(1)?,
             created_at: r.get(2)?,
             position: [r.get(3)?, r.get(4)?, r.get(5)?],
-            state: r.get(6)?,
-            target_asteroid: r.get(7)?,
+            velocity: [r.get(6)?, r.get(7)?, r.get(8)?],
+            state: r.get(9)?,
+            target_asteroid: r.get(10)?,
         })
     })?;
     let mut out = Vec::new();
@@ -733,7 +765,7 @@ fn load_drones_tx(tx: &Transaction, player_id: i64) -> Result<Vec<Drone>> {
 
 fn load_drones_conn(conn: &Connection, player_id: i64) -> Result<Vec<Drone>> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, created_at, pos_x, pos_y, pos_z, state, target_asteroid \
+        "SELECT id, kind, created_at, pos_x, pos_y, pos_z, vel_x, vel_y, vel_z, state, target_asteroid \
          FROM player_drones WHERE player_id = ?1 ORDER BY id",
     )?;
     let rows = stmt.query_map(params![player_id], |r| {
@@ -742,8 +774,9 @@ fn load_drones_conn(conn: &Connection, player_id: i64) -> Result<Vec<Drone>> {
             kind: r.get(1)?,
             created_at: r.get(2)?,
             position: [r.get(3)?, r.get(4)?, r.get(5)?],
-            state: r.get(6)?,
-            target_asteroid: r.get(7)?,
+            velocity: [r.get(6)?, r.get(7)?, r.get(8)?],
+            state: r.get(9)?,
+            target_asteroid: r.get(10)?,
         })
     })?;
     let mut out = Vec::new();
@@ -897,11 +930,33 @@ pub fn order_drone(
                 params![player_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?;
-            match nearest_alive_asteroid(&tx, player_system, [px, py, pz], now_secs)? {
+            let mut exclude = already_targeted_asteroids(&tx, player_id)?;
+            exclude.retain(|&aid| {
+                tx.query_row(
+                    "SELECT target_asteroid FROM player_drones WHERE id = ?1",
+                    params![drone_id],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .ok()
+                .flatten()
+                .map(|own| own != aid)
+                .unwrap_or(true)
+            });
+            match nearest_alive_asteroid_filtered(
+                &tx,
+                player_system,
+                [px, py, pz],
+                now_secs,
+                &exclude,
+                None,
+            )? {
                 Some(aid) => {
+                    let (slot_x, slot_y, slot_z) =
+                        compute_slot_pos(&tx, player_id, drone_id, px, py, pz)?;
                     tx.execute(
-                        "UPDATE player_drones SET state = 'to_target', target_asteroid = ?1 WHERE id = ?2",
-                        params![aid, drone_id],
+                        "UPDATE player_drones SET state = 'to_target', target_asteroid = ?1, \
+                         pos_x = ?2, pos_y = ?3, pos_z = ?4, vel_x = 0, vel_y = 0, vel_z = 0 WHERE id = ?5",
+                        params![aid, slot_x, slot_y, slot_z, drone_id],
                     )?;
                     1usize
                 }
@@ -937,6 +992,7 @@ pub fn order_all_drones(
     conn: &mut Connection,
     player_id: i64,
     order: &str,
+    kind: Option<&str>,
 ) -> Result<OrderOutcome> {
     let tx = conn.transaction()?;
     let player_system: i64 = tx.query_row(
@@ -946,49 +1002,54 @@ pub fn order_all_drones(
     )?;
     let now_secs: f32 = (Utc::now().timestamp_millis() as f64 / 1000.0) as f32;
 
-    let mut affected: usize = 0;
-    match order {
-        "mine_nearest" => {
-            let (px, py, pz): (f32, f32, f32) = tx.query_row(
-                "SELECT x, y, z FROM player_state WHERE player_id = ?1",
-                params![player_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?;
-            let drone_ids: Vec<i64> = {
-                let mut stmt = tx.prepare(
-                    "SELECT id FROM player_drones WHERE player_id = ?1 AND state IN ('idle', 'returning')",
-                )?;
-                let it = stmt.query_map(params![player_id], |r| r.get::<_, i64>(0))?;
-                let mut v = Vec::new();
-                for row in it {
-                    v.push(row?);
-                }
-                v
-            };
-            for did in drone_ids {
-                if let Some(aid) =
-                    nearest_alive_asteroid(&tx, player_system, [px, py, pz], now_secs)?
-                {
-                    tx.execute(
-                        "UPDATE player_drones SET state = 'to_target', target_asteroid = ?1 WHERE id = ?2",
-                        params![aid, did],
-                    )?;
-                    affected += 1;
-                }
+    let affected: usize = match order {
+        "mine_distinct" | "mine_nearest" => assign_strategy(
+            &tx,
+            player_id,
+            player_system,
+            now_secs,
+            AssignStrategy::Distinct,
+        )?,
+        "mine_kind" => {
+            let kf = kind.unwrap_or("iron");
+            if AsteroidKind::from_str(kf).is_none() {
+                tx.commit()?;
+                return Ok(OrderOutcome::Reject("unknown_kind".into()));
             }
+            assign_strategy(
+                &tx,
+                player_id,
+                player_system,
+                now_secs,
+                AssignStrategy::SameKind(kf.to_string()),
+            )?
         }
-        "idle" => {
-            let n = tx.execute(
-                "UPDATE player_drones SET state = 'returning', target_asteroid = NULL \
-                 WHERE player_id = ?1 AND state IN ('to_target', 'mining')",
-                params![player_id],
-            )?;
-            affected = n;
-        }
+        "spread_kinds" => assign_strategy(
+            &tx,
+            player_id,
+            player_system,
+            now_secs,
+            AssignStrategy::SpreadKinds,
+        )?,
+        "idle" => tx.execute(
+            "UPDATE player_drones SET state = 'returning', target_asteroid = NULL \
+             WHERE player_id = ?1 AND state IN ('to_target', 'mining')",
+            params![player_id],
+        )?,
         _ => {
             tx.commit()?;
             return Ok(OrderOutcome::Reject("unknown_order".into()));
         }
+    };
+    if affected == 0 && order != "idle" {
+        let drones = load_drones_tx(&tx, player_id)?;
+        let inventory = load_inventory_tx(&tx, player_id)?;
+        tx.commit()?;
+        return Ok(OrderOutcome::Ok {
+            affected,
+            drones,
+            inventory,
+        });
     }
     let drones = load_drones_tx(&tx, player_id)?;
     let inventory = load_inventory_tx(&tx, player_id)?;
@@ -1000,6 +1061,138 @@ pub fn order_all_drones(
     })
 }
 
+fn compute_slot_pos(
+    tx: &Transaction,
+    player_id: i64,
+    drone_id: i64,
+    px: f32,
+    py: f32,
+    pz: f32,
+) -> Result<(f32, f32, f32)> {
+    let (idx, total): (i64, i64) = tx.query_row(
+        "WITH ordered AS (\
+            SELECT id, ROW_NUMBER() OVER (ORDER BY id) - 1 AS rn, COUNT(*) OVER () AS total \
+            FROM player_drones WHERE player_id = ?1 \
+         ) SELECT rn, total FROM ordered WHERE id = ?2",
+        params![player_id, drone_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let total_f = total.max(1) as f32;
+    let slot_angle = std::f32::consts::TAU * (idx as f32) / total_f;
+    Ok((
+        px + slot_angle.cos() * DRONE_FORMATION_RADIUS,
+        py + DRONE_FORMATION_HEIGHT,
+        pz + slot_angle.sin() * DRONE_FORMATION_RADIUS,
+    ))
+}
+
+enum AssignStrategy {
+    Distinct,
+    SameKind(String),
+    SpreadKinds,
+}
+
+fn assign_strategy(
+    tx: &Transaction,
+    player_id: i64,
+    player_system: i64,
+    now_secs: f32,
+    strategy: AssignStrategy,
+) -> Result<usize> {
+    let (px, py, pz): (f32, f32, f32) = tx.query_row(
+        "SELECT x, y, z FROM player_state WHERE player_id = ?1",
+        params![player_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let from = [px, py, pz];
+
+    // Charger tous les drones du joueur dans l'ordre stable (id) pour avoir
+    // l'index de slot de formation cohérent avec ce que tick_drones utilise.
+    let all_drones: Vec<(i64, String)> = {
+        let mut stmt = tx.prepare(
+            "SELECT id, state FROM player_drones WHERE player_id = ?1 ORDER BY id",
+        )?;
+        let it = stmt.query_map(params![player_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut v = Vec::new();
+        for row in it {
+            v.push(row?);
+        }
+        v
+    };
+    if all_drones.is_empty() {
+        return Ok(0);
+    }
+    let total = all_drones.len();
+    let drone_rows: Vec<(i64, usize)> = all_drones
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, st))| st == "idle" || st == "returning")
+        .map(|(idx, (id, _))| (*id, idx))
+        .collect();
+    if drone_rows.is_empty() {
+        return Ok(0);
+    }
+
+    let mut already = already_targeted_asteroids(tx, player_id)?;
+    let kind_cycle = ["iron", "copper", "silicon", "ice"];
+    let mut cycle_idx: usize = 0;
+    let mut affected: usize = 0;
+
+    for (did, slot_idx) in drone_rows {
+        let kind_filter: Option<String> = match &strategy {
+            AssignStrategy::Distinct => None,
+            AssignStrategy::SameKind(k) => Some(k.clone()),
+            AssignStrategy::SpreadKinds => {
+                let mut chosen: Option<String> = None;
+                for _ in 0..kind_cycle.len() {
+                    let k = kind_cycle[cycle_idx % kind_cycle.len()];
+                    cycle_idx += 1;
+                    if nearest_alive_asteroid_filtered(
+                        tx,
+                        player_system,
+                        from,
+                        now_secs,
+                        &already,
+                        Some(k),
+                    )?
+                    .is_some()
+                    {
+                        chosen = Some(k.to_string());
+                        break;
+                    }
+                }
+                chosen
+            }
+        };
+        let aid_opt = nearest_alive_asteroid_filtered(
+            tx,
+            player_system,
+            from,
+            now_secs,
+            &already,
+            kind_filter.as_deref(),
+        )?;
+        let aid = match aid_opt {
+            Some(a) => a,
+            None => continue,
+        };
+        let slot_angle = std::f32::consts::TAU * (slot_idx as f32) / (total.max(1) as f32);
+        let slot_x = px + slot_angle.cos() * DRONE_FORMATION_RADIUS;
+        let slot_y = py + DRONE_FORMATION_HEIGHT;
+        let slot_z = pz + slot_angle.sin() * DRONE_FORMATION_RADIUS;
+        tx.execute(
+            "UPDATE player_drones SET state = 'to_target', target_asteroid = ?1, \
+             pos_x = ?2, pos_y = ?3, pos_z = ?4, vel_x = 0, vel_y = 0, vel_z = 0 WHERE id = ?5",
+            params![aid, slot_x, slot_y, slot_z, did],
+        )?;
+        already.push(aid);
+        affected += 1;
+    }
+    Ok(affected)
+}
+
 fn asteroid_world_pos(orbit_radius: f32, orbit_y: f32, phase: f32, omega: f32, t: f32) -> [f32; 3] {
     let angle = phase + omega * t;
     [
@@ -1009,14 +1202,16 @@ fn asteroid_world_pos(orbit_radius: f32, orbit_y: f32, phase: f32, omega: f32, t
     ]
 }
 
-fn nearest_alive_asteroid(
+fn nearest_alive_asteroid_filtered(
     tx: &Transaction,
     system_id: i64,
     from: [f32; 3],
     t: f32,
+    exclude: &[i64],
+    kind_filter: Option<&str>,
 ) -> Result<Option<i64>> {
     let mut stmt = tx.prepare(
-        "SELECT id, orbit_radius, orbit_y, phase, omega, stock FROM asteroids WHERE system_id = ?1",
+        "SELECT id, orbit_radius, orbit_y, phase, omega, stock, kind FROM asteroids WHERE system_id = ?1",
     )?;
     let rows = stmt.query_map(params![system_id], |r| {
         Ok((
@@ -1026,14 +1221,23 @@ fn nearest_alive_asteroid(
             r.get::<_, f32>(3)?,
             r.get::<_, f32>(4)?,
             r.get::<_, i32>(5)?,
+            r.get::<_, String>(6)?,
         ))
     })?;
     let mut best_id: Option<i64> = None;
     let mut best_d2: f32 = f32::INFINITY;
     for row in rows {
-        let (id, r, y, phase, omega, stock) = row?;
+        let (id, r, y, phase, omega, stock, kind) = row?;
         if stock <= 0 {
             continue;
+        }
+        if exclude.contains(&id) {
+            continue;
+        }
+        if let Some(kf) = kind_filter {
+            if kind != kf {
+                continue;
+            }
         }
         let p = asteroid_world_pos(r, y, phase, omega, t);
         let dx = p[0] - from[0];
@@ -1046,6 +1250,18 @@ fn nearest_alive_asteroid(
         }
     }
     Ok(best_id)
+}
+
+fn already_targeted_asteroids(tx: &Transaction, player_id: i64) -> Result<Vec<i64>> {
+    let mut stmt = tx.prepare(
+        "SELECT target_asteroid FROM player_drones WHERE player_id = ?1 AND target_asteroid IS NOT NULL",
+    )?;
+    let rows = stmt.query_map(params![player_id], |r| r.get::<_, i64>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 pub struct DroneTickResult {
@@ -1077,7 +1293,6 @@ pub fn tick_drones(conn: &mut Connection, player_id: i64, dt: f32) -> Result<Dro
 
     let total = drones.len();
     let mut changed = false;
-    let speed = DRONE_SPEED * dt;
 
     #[allow(clippy::needless_range_loop)]
     for i in 0..total {
@@ -1091,10 +1306,7 @@ pub fn tick_drones(conn: &mut Connection, player_id: i64, dt: f32) -> Result<Dro
 
         match d.state.as_str() {
             "idle" => {
-                if d.position != slot_pos {
-                    d.position = slot_pos;
-                    changed = true;
-                }
+                // No-op: client owns the formation animation. Skip emitting.
             }
             "to_target" => {
                 let aid = match d.target_asteroid {
@@ -1132,15 +1344,12 @@ pub fn tick_drones(conn: &mut Connection, player_id: i64, dt: f32) -> Result<Dro
                     continue;
                 }
                 let target = asteroid_world_pos(r, y, phase, omega, now_secs);
-                let (npos, dist_after) = step_toward(d.position, target, speed);
+                let (npos, nvel, ndist) = accel_step(d.position, d.velocity, target, dt);
                 d.position = npos;
-                let dx = target[0] - npos[0];
-                let dy = target[1] - npos[1];
-                let dz = target[2] - npos[2];
-                let dist_now = (dx * dx + dy * dy + dz * dz).sqrt();
-                let _ = dist_after;
-                if dist_now <= DRONE_MINE_RANGE {
+                d.velocity = nvel;
+                if ndist <= DRONE_MINE_RANGE {
                     d.state = "mining".into();
+                    d.velocity = [0.0, 0.0, 0.0];
                 }
                 changed = true;
             }
@@ -1230,15 +1439,13 @@ pub fn tick_drones(conn: &mut Connection, player_id: i64, dt: f32) -> Result<Dro
                 }
             }
             "returning" => {
-                let (npos, _) = step_toward(d.position, slot_pos, speed);
+                let (npos, nvel, ndist) = accel_step(d.position, d.velocity, slot_pos, dt);
                 d.position = npos;
-                let dx = slot_pos[0] - npos[0];
-                let dy = slot_pos[1] - npos[1];
-                let dz = slot_pos[2] - npos[2];
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                if dist <= DRONE_RETURN_TOLERANCE {
+                d.velocity = nvel;
+                if ndist <= DRONE_RETURN_TOLERANCE {
                     d.state = "idle".into();
                     d.target_asteroid = None;
+                    d.velocity = [0.0, 0.0, 0.0];
                 }
                 changed = true;
             }
@@ -1252,13 +1459,16 @@ pub fn tick_drones(conn: &mut Connection, player_id: i64, dt: f32) -> Result<Dro
 
     if changed {
         let mut up = tx.prepare(
-            "UPDATE player_drones SET pos_x = ?1, pos_y = ?2, pos_z = ?3, state = ?4, target_asteroid = ?5 WHERE id = ?6",
+            "UPDATE player_drones SET pos_x = ?1, pos_y = ?2, pos_z = ?3, vel_x = ?4, vel_y = ?5, vel_z = ?6, state = ?7, target_asteroid = ?8 WHERE id = ?9",
         )?;
         for d in &drones {
             up.execute(params![
                 d.position[0],
                 d.position[1],
                 d.position[2],
+                d.velocity[0],
+                d.velocity[1],
+                d.velocity[2],
                 d.state,
                 d.target_asteroid,
                 d.id
@@ -1275,22 +1485,70 @@ pub fn tick_drones(conn: &mut Connection, player_id: i64, dt: f32) -> Result<Dro
     })
 }
 
-fn step_toward(from: [f32; 3], to: [f32; 3], step: f32) -> ([f32; 3], f32) {
-    let dx = to[0] - from[0];
-    let dy = to[1] - from[1];
-    let dz = to[2] - from[2];
-    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-    if dist <= step || dist < 0.0001 {
-        return (to, 0.0);
+fn accel_step(
+    pos: [f32; 3],
+    vel: [f32; 3],
+    target: [f32; 3],
+    dt: f32,
+) -> ([f32; 3], [f32; 3], f32) {
+    let to = [target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]];
+    let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+    if dist < 0.0001 {
+        return (target, [0.0, 0.0, 0.0], 0.0);
     }
-    let inv = step / dist;
-    (
-        [from[0] + dx * inv, from[1] + dy * inv, from[2] + dz * inv],
-        dist - step,
-    )
+    let dir = [to[0] / dist, to[1] / dist, to[2] / dist];
+    let brake_speed = (2.0 * DRONE_ACCEL * dist).sqrt();
+    let speed_cap = DRONE_SPEED.min(brake_speed);
+    let desired_vel = [dir[0] * speed_cap, dir[1] * speed_cap, dir[2] * speed_cap];
+    let dvx = desired_vel[0] - vel[0];
+    let dvy = desired_vel[1] - vel[1];
+    let dvz = desired_vel[2] - vel[2];
+    let dvl = (dvx * dvx + dvy * dvy + dvz * dvz).sqrt();
+    let max_dv = DRONE_ACCEL * dt;
+    let new_vel = if dvl > max_dv && dvl > 0.0001 {
+        [
+            vel[0] + dvx * max_dv / dvl,
+            vel[1] + dvy * max_dv / dvl,
+            vel[2] + dvz * max_dv / dvl,
+        ]
+    } else {
+        desired_vel
+    };
+    let new_pos = [
+        pos[0] + new_vel[0] * dt,
+        pos[1] + new_vel[1] * dt,
+        pos[2] + new_vel[2] * dt,
+    ];
+    let nx = target[0] - new_pos[0];
+    let ny = target[1] - new_pos[1];
+    let nz = target[2] - new_pos[2];
+    let new_dist = (nx * nx + ny * ny + nz * nz).sqrt();
+    (new_pos, new_vel, new_dist)
 }
 
 #[allow(dead_code)]
 pub fn load_drones(conn: &Connection, player_id: i64) -> Result<Vec<Drone>> {
     load_drones_conn(conn, player_id)
+}
+
+pub fn cheat_grant_resources(
+    conn: &mut Connection,
+    player_id: i64,
+    amount: i64,
+) -> Result<(Inventory, Vec<Drone>, Vec<Factory>)> {
+    let tx = conn.transaction()?;
+    {
+        let mut up = tx.prepare(
+            "INSERT INTO player_inventory(player_id, kind, amount) VALUES(?1, ?2, ?3) \
+             ON CONFLICT(player_id, kind) DO UPDATE SET amount = amount + excluded.amount",
+        )?;
+        for k in ["iron", "copper", "silicon", "ice"] {
+            up.execute(params![player_id, k, amount])?;
+        }
+    }
+    let inventory = load_inventory_tx(&tx, player_id)?;
+    let drones = load_drones_tx(&tx, player_id)?;
+    let factories = load_factories_tx(&tx, player_id)?;
+    tx.commit()?;
+    Ok((inventory, drones, factories))
 }

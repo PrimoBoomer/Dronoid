@@ -314,12 +314,18 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
                         ws.send(Message::Text(protocol::encode(&f))).await?;
                     }
                 }
-                Ok(ClientMsg::OrderAllDrones { order }) => {
+                Ok(ClientMsg::OrderAllDrones { order, kind }) => {
                     let order_state = state.clone();
                     let order_for_task = order.clone();
+                    let kind_for_task = kind.clone();
                     let order_res = tokio::task::spawn_blocking(move || {
                         let mut conn = order_state.db.lock().expect("db mutex poisoned");
-                        db::order_all_drones(&mut conn, player_id, &order_for_task)
+                        db::order_all_drones(
+                            &mut conn,
+                            player_id,
+                            &order_for_task,
+                            kind_for_task.as_deref(),
+                        )
                     })
                     .await?;
                     let (msg, follow_up) = match order_res {
@@ -361,6 +367,36 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
                     ws.send(Message::Text(protocol::encode(&msg))).await?;
                     if let Some(f) = follow_up {
                         ws.send(Message::Text(protocol::encode(&f))).await?;
+                    }
+                }
+                Ok(ClientMsg::Cheat { action }) => {
+                    let cheat_state = state.clone();
+                    let cheat_action = action.clone();
+                    let cheat_res = tokio::task::spawn_blocking(move || {
+                        let mut conn = cheat_state.db.lock().expect("db mutex poisoned");
+                        match cheat_action.as_str() {
+                            "grant_resources" => db::cheat_grant_resources(&mut conn, player_id, 100)
+                                .map(Some),
+                            _ => Ok(None),
+                        }
+                    })
+                    .await?;
+                    match cheat_res {
+                        Ok(Some((inventory, drones, factories))) => {
+                            tracing::info!(%peer, session = %session_id, player_id, action = %action, "cheat applied");
+                            ws.send(Message::Text(protocol::encode(&ServerMsg::DroneTick {
+                                drones,
+                                inventory,
+                            })))
+                            .await?;
+                            let _ = factories;
+                        }
+                        Ok(None) => {
+                            tracing::debug!(%peer, session = %session_id, action = %action, "unknown cheat");
+                        }
+                        Err(e) => {
+                            tracing::error!(%peer, session = %session_id, error = %e, "cheat db error");
+                        }
                     }
                 }
                 Err(e) => {

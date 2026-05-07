@@ -31,6 +31,18 @@ func _ready() -> void:
 	_status_label.text = ""
 	if OS.is_debug_build() and _name_edit.text.is_empty():
 		_name_edit.text = "player%04d" % (randi() % 10000)
+	_add_quit_button()
+
+func _add_quit_button() -> void:
+	if OS.has_feature("web"):
+		return
+	var btn := Button.new()
+	btn.text = "Quitter"
+	_apply_button(btn)
+	btn.add_theme_font_size_override("font_size", 13)
+	btn.pressed.connect(get_tree().quit)
+	var box: VBoxContainer = $Center/Panel/Margin/Box
+	box.add_child(btn)
 
 func _apply_theme() -> void:
 	var panel_style := StyleBoxFlat.new()

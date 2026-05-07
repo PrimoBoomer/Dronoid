@@ -148,17 +148,19 @@ pub struct Drone {
     pub kind: String,
     pub created_at: String,
     pub position: [f32; 3],
+    pub velocity: [f32; 3],
     pub state: String,
     pub target_asteroid: Option<i64>,
 }
 
-pub const DRONE_SPEED: f32 = 22.0;
+pub const DRONE_SPEED: f32 = 12.0;
+pub const DRONE_ACCEL: f32 = 4.0;
 pub const DRONE_MINE_RANGE: f32 = 8.0;
 pub const DRONE_MINE_INTERVAL_MS: i64 = 200;
 pub const DRONE_MINE_AMOUNT: i32 = 2;
-pub const DRONE_FORMATION_RADIUS: f32 = 6.0;
-pub const DRONE_FORMATION_HEIGHT: f32 = 1.2;
-pub const DRONE_RETURN_TOLERANCE: f32 = 1.5;
+pub const DRONE_FORMATION_RADIUS: f32 = 14.0;
+pub const DRONE_FORMATION_HEIGHT: f32 = 2.5;
+pub const DRONE_RETURN_TOLERANCE: f32 = 2.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Factory {

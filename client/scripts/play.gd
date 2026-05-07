@@ -28,7 +28,7 @@ var _bh_sprite_texture: Texture2D = null
 
 @onready var _ship: Node3D = $Ship
 @onready var _cam: Camera3D = $ChaseCam
-@onready var _status: Label = $UI/Status
+var _status: Label = null
 
 var _pause_layer: CanvasLayer = null
 var _pause_root: Control = null
@@ -181,6 +181,12 @@ var _drone_view_camera: Camera3D = null
 var _drone_view_target_id: int = -1
 var _drone_view_open: bool = false
 
+var _drone_hud_layer: CanvasLayer = null
+var _drone_hud_root: Control = null
+var _drone_hud_widgets: Array = []
+
+var _cheat_layer: CanvasLayer = null
+
 const DRONE_STATE_LABEL := {
 	"idle": "Inactif",
 	"to_target": "En route",
@@ -190,13 +196,16 @@ const DRONE_STATE_LABEL := {
 
 var _drone_nodes: Array = []
 var _drone_beams: Array = []
+var _drone_target_pos: Array = []
+var _drone_target_vel: Array = []
+var _drone_target_t_ms: int = 0
 var _factory_nodes: Array = []
-var _drones_anim_phase: float = 0.0
-const DRONE_FORMATION_RADIUS: float = 6.0
-const DRONE_FORMATION_HEIGHT: float = 1.2
-const DRONE_ORBIT_RATE: float = 0.6
-const DRONE_VISUAL_SCALE: float = 1.7
+const DRONE_FORMATION_RADIUS: float = 14.0
+const DRONE_FORMATION_HEIGHT: float = 2.5
+const DRONE_VISUAL_SCALE: float = 2.4
 const DRONE_MINE_RANGE_VISUAL: float = 8.0
+const DRONE_RECONCILE_RATE: float = 6.0
+const DRONE_EXTRAPOLATE_CAP_S: float = 0.30
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -212,7 +221,7 @@ func _ready() -> void:
 	_epoch_ms = int(sys.get("epoch_ms", 0))
 
 	var sname := String(star.get("name", "?"))
-	_status.text = "%s — %d planètes • %d astéroïdes • %d étoiles distantes" % [
+	var status_text := "%s — %d planètes • %d astéroïdes • %d étoiles distantes" % [
 		sname, planets.size(), asteroids.size(), far_stars.size()
 	]
 
@@ -231,6 +240,11 @@ func _ready() -> void:
 	_build_inventory_panel()
 	_build_drone_submenu()
 	_build_drone_view()
+	_build_drone_hud()
+	if OS.is_debug_build():
+		_build_cheat_panel()
+	if _status != null:
+		_status.text = status_text
 	_apply_inventory(spawn.get("inventory", {}) as Dictionary)
 	_drones_state = (spawn.get("drones", []) as Array).duplicate()
 	_factories_state = (spawn.get("factories", []) as Array).duplicate()
@@ -600,6 +614,14 @@ func _build_pause_menu() -> void:
 	quit_btn.pressed.connect(_on_quit_to_menu_pressed)
 	box.add_child(quit_btn)
 
+	if not OS.has_feature("web"):
+		var quit_game_btn := Button.new()
+		quit_game_btn.text = "Quitter le jeu"
+		quit_game_btn.custom_minimum_size = Vector2(240, 0)
+		_style_button(quit_game_btn)
+		quit_game_btn.pressed.connect(_on_quit_game_pressed)
+		box.add_child(quit_game_btn)
+
 	_pause_root = center
 	_pause_layer.visible = false
 
@@ -623,6 +645,9 @@ func _resume() -> void:
 
 func _on_resume_pressed() -> void:
 	_resume()
+
+func _on_quit_game_pressed() -> void:
+	get_tree().quit()
 
 func _on_quit_to_menu_pressed() -> void:
 	get_tree().paused = false
@@ -747,10 +772,10 @@ func _process(delta: float) -> void:
 	_update_mining(t)
 	_update_camera(delta)
 	if _drone_nodes.size() > 0:
-		_drones_anim_phase = fposmod(_drones_anim_phase + DRONE_ORBIT_RATE * delta, TAU)
-		_position_drones()
+		_position_drones(delta)
 	if _drone_view_open:
 		_update_drone_view()
+	_update_drone_hud()
 
 func _update_mining(t: float) -> void:
 	if not _mining or _belt_mm == null or _mining_target_idx < 0:
@@ -1362,11 +1387,48 @@ func _build_inventory_panel() -> void:
 	_inv_drones_title.add_theme_color_override("font_color", UI_SUBTLE)
 	box.add_child(_inv_drones_title)
 
+	var strat_label := Label.new()
+	strat_label.text = "Stratégie de minage collectif"
+	strat_label.add_theme_font_size_override("font_size", 12)
+	strat_label.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(strat_label)
+
 	_inv_order_all_btn = Button.new()
-	_inv_order_all_btn.text = "Donner ordre à tous : Miner les plus proches"
+	_inv_order_all_btn.text = "Distincts (proches)"
 	_style_button(_inv_order_all_btn)
-	_inv_order_all_btn.pressed.connect(_on_order_all_pressed)
+	_inv_order_all_btn.pressed.connect(_on_order_all_pressed.bind("mine_distinct", ""))
 	box.add_child(_inv_order_all_btn)
+
+	var spread_btn := Button.new()
+	spread_btn.text = "Répartir par type"
+	_style_button(spread_btn)
+	spread_btn.pressed.connect(_on_order_all_pressed.bind("spread_kinds", ""))
+	box.add_child(spread_btn)
+
+	var same_label := Label.new()
+	same_label.text = "Tout sur :"
+	same_label.add_theme_font_size_override("font_size", 11)
+	same_label.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(same_label)
+
+	var same_row := HBoxContainer.new()
+	same_row.add_theme_constant_override("separation", 4)
+	box.add_child(same_row)
+	for kind in INV_KINDS:
+		var k_btn := Button.new()
+		k_btn.text = String(INV_DISPLAY.get(kind, kind))
+		_style_button(k_btn)
+		k_btn.add_theme_font_size_override("font_size", 12)
+		k_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		k_btn.pressed.connect(_on_order_all_pressed.bind("mine_kind", kind))
+		same_row.add_child(k_btn)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Annuler tous"
+	_style_button(cancel_btn)
+	cancel_btn.add_theme_font_size_override("font_size", 12)
+	cancel_btn.pressed.connect(_on_order_all_pressed.bind("idle", ""))
+	box.add_child(cancel_btn)
 
 	_inv_drones_list = VBoxContainer.new()
 	_inv_drones_list.add_theme_constant_override("separation", 2)
@@ -1506,6 +1568,15 @@ func _on_drone_tick(payload: Dictionary) -> void:
 	_drones_state = (payload.get("drones", []) as Array).duplicate()
 	_apply_inventory(payload.get("inventory", {}) as Dictionary)
 	_refresh_drones_visuals()
+	_drone_target_t_ms = Net.server_now_ms()
+	_drone_target_pos.resize(_drones_state.size())
+	_drone_target_vel.resize(_drones_state.size())
+	for i in _drones_state.size():
+		var d: Dictionary = _drones_state[i]
+		var p_arr: Array = d.get("position", [0.0, 0.0, 0.0]) as Array
+		var v_arr: Array = d.get("velocity", [0.0, 0.0, 0.0]) as Array
+		_drone_target_pos[i] = Vector3(float(p_arr[0]), float(p_arr[1]), float(p_arr[2]))
+		_drone_target_vel[i] = Vector3(float(v_arr[0]), float(v_arr[1]), float(v_arr[2]))
 	if _inv_panel_visible:
 		_refresh_inventory_panel()
 
@@ -1522,8 +1593,8 @@ func _on_order_result(payload: Dictionary) -> void:
 		_inv_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
 		_inv_status_lbl.text = "Ordre rejeté : %s" % reason
 
-func _on_order_all_pressed() -> void:
-	if not Net.send_order_all_drones("mine_nearest"):
+func _on_order_all_pressed(order: String, kind: String) -> void:
+	if not Net.send_order_all_drones(order, kind):
 		_inv_status_lbl.text = "Réseau indisponible"
 
 func _build_drone_submenu() -> void:
@@ -1712,6 +1783,185 @@ func _update_drone_view() -> void:
 			float(pos_arr[0]), float(pos_arr[1]), float(pos_arr[2]),
 		]
 
+func _build_cheat_panel() -> void:
+	_cheat_layer = CanvasLayer.new()
+	_cheat_layer.name = "CheatPanel"
+	_cheat_layer.layer = 8
+	add_child(_cheat_layer)
+
+	var panel := PanelContainer.new()
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.offset_left = -260.0
+	panel.offset_right = -16.0
+	panel.offset_top = 220.0
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(8, UI_BG, 10))
+	_cheat_layer.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	panel.add_child(box)
+
+	var stats_title := Label.new()
+	stats_title.text = "Système"
+	stats_title.add_theme_font_size_override("font_size", 11)
+	stats_title.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(stats_title)
+
+	_status = Label.new()
+	_status.add_theme_color_override("font_color", UI_TEXT)
+	_status.add_theme_font_size_override("font_size", 12)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status.custom_minimum_size = Vector2(232, 0)
+	box.add_child(_status)
+
+	box.add_child(HSeparator.new())
+
+	var title := Label.new()
+	title.text = "Triche (debug)"
+	title.add_theme_font_size_override("font_size", 12)
+	title.add_theme_color_override("font_color", Color(0.95, 0.75, 0.55))
+	box.add_child(title)
+
+	var btn := Button.new()
+	btn.text = "+100 chaque matériau"
+	_style_button(btn)
+	btn.add_theme_font_size_override("font_size", 12)
+	btn.pressed.connect(_on_cheat_grant_pressed)
+	box.add_child(btn)
+
+func _on_cheat_grant_pressed() -> void:
+	Net.send_cheat("grant_resources")
+
+func _build_drone_hud() -> void:
+	_drone_hud_layer = CanvasLayer.new()
+	_drone_hud_layer.name = "DroneHud"
+	_drone_hud_layer.layer = 9
+	add_child(_drone_hud_layer)
+	_drone_hud_root = Control.new()
+	_drone_hud_root.anchor_right = 1.0
+	_drone_hud_root.anchor_bottom = 1.0
+	_drone_hud_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_drone_hud_layer.add_child(_drone_hud_root)
+
+func _make_drone_hud_widget() -> Control:
+	var root := Control.new()
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.size = Vector2(120, 24)
+
+	var tip := PanelContainer.new()
+	tip.name = "Tip"
+	tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.04, 0.06, 0.12, 0.78)
+	style.border_width_left = 1
+	style.border_width_right = 1
+	style.border_width_top = 1
+	style.border_width_bottom = 1
+	style.border_color = Color(0.40, 0.65, 1.00, 0.55)
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_left = 4
+	style.corner_radius_bottom_right = 4
+	style.content_margin_left = 6
+	style.content_margin_right = 6
+	style.content_margin_top = 2
+	style.content_margin_bottom = 2
+	tip.add_theme_stylebox_override("panel", style)
+	var tip_lbl := Label.new()
+	tip_lbl.name = "TipLabel"
+	tip_lbl.add_theme_font_size_override("font_size", 11)
+	tip_lbl.add_theme_color_override("font_color", UI_TEXT)
+	tip.add_child(tip_lbl)
+	root.add_child(tip)
+
+	var arrow := Label.new()
+	arrow.name = "Arrow"
+	arrow.text = "▶"
+	arrow.add_theme_font_size_override("font_size", 22)
+	arrow.add_theme_color_override("font_color", UI_BORDER)
+	arrow.size = Vector2(24, 24)
+	arrow.pivot_offset = Vector2(12, 12)
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(arrow)
+
+	return root
+
+func _refresh_drone_hud_widgets() -> void:
+	if _drone_hud_root == null:
+		return
+	while _drone_hud_widgets.size() > _drones_state.size():
+		var w: Control = _drone_hud_widgets.pop_back()
+		if is_instance_valid(w):
+			w.queue_free()
+	while _drone_hud_widgets.size() < _drones_state.size():
+		var w := _make_drone_hud_widget()
+		_drone_hud_root.add_child(w)
+		_drone_hud_widgets.append(w)
+
+func _update_drone_hud() -> void:
+	if _drone_hud_root == null:
+		return
+	if _drone_hud_widgets.size() != _drones_state.size():
+		_refresh_drone_hud_widgets()
+	if _drone_hud_widgets.is_empty():
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var center := vp * 0.5
+	var margin := 36.0
+	for i in _drone_hud_widgets.size():
+		var w: Control = _drone_hud_widgets[i]
+		if not is_instance_valid(w):
+			continue
+		if i >= _drone_nodes.size() or i >= _drones_state.size():
+			w.visible = false
+			continue
+		var node: Node3D = _drone_nodes[i]
+		var d: Dictionary = _drones_state[i]
+		if not is_instance_valid(node):
+			w.visible = false
+			continue
+		var world_pos := node.global_position
+		var to_drone := world_pos - _cam.global_position
+		var fwd := -_cam.global_transform.basis.z
+		var forward := to_drone.dot(fwd)
+		var screen_pos := _cam.unproject_position(world_pos)
+		var off_screen: bool = forward <= 0.0 \
+			or screen_pos.x < margin \
+			or screen_pos.x > vp.x - margin \
+			or screen_pos.y < margin \
+			or screen_pos.y > vp.y - margin
+
+		var tip: PanelContainer = w.get_node("Tip") as PanelContainer
+		var tip_lbl: Label = tip.get_node("TipLabel") as Label
+		var arrow: Label = w.get_node("Arrow") as Label
+		w.visible = true
+
+		if off_screen:
+			tip.visible = false
+			arrow.visible = true
+			var dir: Vector2 = (screen_pos - center) if forward > 0.0 else (center - screen_pos)
+			if dir.length_squared() < 0.0001:
+				dir = Vector2(0, -1)
+			dir = dir.normalized()
+			var halfw := center.x - margin
+			var halfh := center.y - margin
+			var t_lim: float = INF
+			if absf(dir.x) > 0.001:
+				t_lim = minf(t_lim, halfw / absf(dir.x))
+			if absf(dir.y) > 0.001:
+				t_lim = minf(t_lim, halfh / absf(dir.y))
+			var pos := center + dir * t_lim
+			arrow.position = pos - Vector2(12, 12)
+			arrow.rotation = dir.angle()
+		else:
+			arrow.visible = false
+			tip.visible = true
+			var state := String(d.get("state", "idle"))
+			var lbl_state: String = DRONE_STATE_LABEL.get(state, state)
+			tip_lbl.text = "D#%d — %s" % [int(d.get("id", 0)), lbl_state]
+			tip.position = screen_pos + Vector2(10, 10)
+
 func _make_drone_mesh() -> Node3D:
 	var root := Node3D.new()
 	root.name = "Drone"
@@ -1846,14 +2096,16 @@ func _refresh_drones_visuals() -> void:
 		var beam := _make_drone_beam()
 		add_child(beam)
 		_drone_beams.append(beam)
-	_position_drones()
+	_position_drones(0.0)
 
-func _position_drones() -> void:
+func _position_drones(delta: float) -> void:
 	var count: int = _drone_nodes.size()
 	if count == 0:
 		return
 	var ship_pos := _ship.global_position
 	var t: float = float(Net.server_now_ms() - _epoch_ms) / 1000.0
+	var k: float = 1.0 - exp(-DRONE_RECONCILE_RATE * delta) if delta > 0.0 else 1.0
+	var elapsed_s: float = clampf(float(Net.server_now_ms() - _drone_target_t_ms) / 1000.0, 0.0, DRONE_EXTRAPOLATE_CAP_S)
 	for i in count:
 		var node: Node3D = _drone_nodes[i]
 		if not is_instance_valid(node):
@@ -1862,21 +2114,32 @@ func _position_drones() -> void:
 		var state := String(d.get("state", "idle"))
 		var beam: MeshInstance3D = _drone_beams[i] if i < _drone_beams.size() else null
 		if state == "idle":
-			var angle: float = (TAU * float(i) / float(count)) + _drones_anim_phase
-			node.global_position = ship_pos + Vector3(
+			var angle: float = TAU * float(i) / float(count)
+			var slot_pos := ship_pos + Vector3(
 				cos(angle) * DRONE_FORMATION_RADIUS,
 				DRONE_FORMATION_HEIGHT,
 				sin(angle) * DRONE_FORMATION_RADIUS,
 			)
+			var k_idle: float = 1.0 - exp(-DRONE_RECONCILE_RATE * delta) if delta > 0.0 else 1.0
+			if node.global_position.distance_to(slot_pos) > 50.0:
+				node.global_position = slot_pos
+			else:
+				node.global_position = node.global_position.lerp(slot_pos, k_idle)
 			node.rotation.y = -angle + PI * 0.5
 			if beam != null:
 				beam.visible = false
 		else:
-			var pos_arr: Array = d.get("position", [0.0, 0.0, 0.0]) as Array
-			var target_pos := Vector3(float(pos_arr[0]), float(pos_arr[1]), float(pos_arr[2]))
-			node.global_position = node.global_position.lerp(target_pos, 0.30)
+			var target_pos: Vector3 = _drone_target_pos[i] if i < _drone_target_pos.size() else node.global_position
+			var target_vel: Vector3 = _drone_target_vel[i] if i < _drone_target_vel.size() else Vector3.ZERO
+			var extrapolated := target_pos + target_vel * elapsed_s
+			if node.global_position.distance_to(extrapolated) > 30.0:
+				node.global_position = extrapolated
+			else:
+				node.global_position = node.global_position.lerp(extrapolated, k)
 			var look_pos: Vector3
-			if state == "mining" or state == "to_target":
+			if target_vel.length_squared() > 0.5:
+				look_pos = node.global_position + target_vel
+			elif state == "mining" or state == "to_target":
 				look_pos = _drone_target_world_pos(d, t, ship_pos)
 			else:
 				look_pos = ship_pos
@@ -1960,28 +2223,33 @@ func _build_inputs_hud() -> void:
 	layer.layer = 5
 	add_child(layer)
 
+	var panel := PanelContainer.new()
+	panel.anchor_left = 0.0
+	panel.anchor_top = 1.0
+	panel.anchor_bottom = 1.0
+	panel.offset_left = 16.0
+	panel.offset_top = -190.0
+	panel.offset_bottom = -16.0
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12))
+	layer.add_child(panel)
+
 	var box := VBoxContainer.new()
-	box.anchor_left = 0.0
-	box.anchor_bottom = 1.0
-	box.anchor_top = 1.0
-	box.offset_left = 16.0
-	box.offset_bottom = -16.0
-	box.offset_top = -180.0
 	box.add_theme_constant_override("separation", 2)
-	layer.add_child(box)
+	panel.add_child(box)
 
 	var lines := [
 		"Souris : orienter",
 		"LMB : propulsion",
-		"RMB : minage",
-		"ALT : libérer le curseur",
+		"MMB : caméra orbitale",
+		"ALT + clic droit : interagir",
+		"E : inventaire",
 		"ESC : menu pause",
 	]
 	for line in lines:
 		var l := Label.new()
 		l.text = line
-		l.add_theme_font_size_override("font_size", 13)
-		l.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
+		l.add_theme_font_size_override("font_size", 12)
+		l.add_theme_color_override("font_color", UI_TEXT)
 		box.add_child(l)
 
 func _build_inventory_hud() -> void:
