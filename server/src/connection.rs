@@ -3,12 +3,15 @@ use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
-use crate::db::{self, MineOutcome};
+use crate::db::{self, BuildOutcome, MineOutcome, OrderOutcome};
 use crate::protocol::{self, ClientMsg, ServerMsg, SERVER_VERSION};
 use crate::AppState;
+
+const DRONE_TICK_MS: u64 = 200;
 
 pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -> Result<()> {
     let mut ws = tokio_tungstenite::accept_async(stream).await?;
@@ -99,14 +102,121 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
         inventory: spawn.inventory,
         position: spawn.position,
         first_time: spawn.first_time,
+        drones: spawn.drones,
+        factories: spawn.factories,
     });
     ws.send(Message::Text(payload)).await?;
 
-    while let Some(frame) = ws.next().await {
-        match frame {
+    let (tx_send, mut rx_send) = mpsc::unbounded_channel::<ServerMsg>();
+
+    let tick_state = state.clone();
+    let tick_tx = tx_send.clone();
+    let tick_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(DRONE_TICK_MS));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let dt = (DRONE_TICK_MS as f32) / 1000.0;
+        loop {
+            interval.tick().await;
+            let s = tick_state.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                let mut conn = s.db.lock().expect("db mutex poisoned");
+                db::tick_drones(&mut conn, player_id, dt)
+            })
+            .await;
+            match res {
+                Ok(Ok(out)) => {
+                    if out.changed
+                        && tick_tx
+                            .send(ServerMsg::DroneTick {
+                                drones: out.drones,
+                                inventory: out.inventory,
+                            })
+                            .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "drone tick db error");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "drone tick join error");
+                    break;
+                }
+            }
+        }
+    });
+
+    loop {
+        tokio::select! {
+            biased;
+            Some(out) = rx_send.recv() => {
+                if ws.send(Message::Text(protocol::encode(&out))).await.is_err() {
+                    break;
+                }
+            }
+            frame = ws.next() => {
+                let Some(frame) = frame else { break };
+                match frame {
             Ok(Message::Text(t)) => match protocol::decode(&t) {
                 Ok(ClientMsg::Hello { .. }) => {
                     tracing::debug!(%peer, session = %session_id, "rx duplicate hello (ignored)");
+                }
+                Ok(ClientMsg::Build { item }) => {
+                    let build_state = state.clone();
+                    let item_for_task = item.clone();
+                    let build_res = tokio::task::spawn_blocking(move || {
+                        let mut conn = build_state.db.lock().expect("db mutex poisoned");
+                        db::build_item(&mut conn, player_id, &item_for_task)
+                    })
+                    .await?;
+                    let msg = match build_res {
+                        Ok(BuildOutcome::Ok {
+                            inventory,
+                            drones,
+                            factories,
+                        }) => {
+                            tracing::info!(%peer, session = %session_id, player_id, item = %item, "built");
+                            ServerMsg::BuildResult {
+                                ok: true,
+                                item: item.clone(),
+                                reason: None,
+                                inventory,
+                                drones,
+                                factories,
+                            }
+                        }
+                        Ok(BuildOutcome::Insufficient {
+                            inventory,
+                            drones,
+                            factories,
+                        }) => {
+                            tracing::debug!(%peer, session = %session_id, player_id, item = %item, "build rejected: insufficient");
+                            ServerMsg::BuildResult {
+                                ok: false,
+                                item: item.clone(),
+                                reason: Some("insufficient_resources".into()),
+                                inventory,
+                                drones,
+                                factories,
+                            }
+                        }
+                        Ok(BuildOutcome::UnknownItem) => {
+                            tracing::debug!(%peer, session = %session_id, item = %item, "unknown build item");
+                            ServerMsg::Error {
+                                code: "bad_build_item".into(),
+                                message: format!("unknown item: {item}"),
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(%peer, session = %session_id, error = %e, "build db error");
+                            ServerMsg::Error {
+                                code: "internal".into(),
+                                message: "internal error during build".into(),
+                            }
+                        }
+                    };
+                    ws.send(Message::Text(protocol::encode(&msg))).await?;
                 }
                 Ok(ClientMsg::Mine { asteroid_id }) => {
                     let mine_state = state.clone();
@@ -152,6 +262,107 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
                     };
                     ws.send(Message::Text(protocol::encode(&msg))).await?;
                 }
+                Ok(ClientMsg::OrderDrone { drone_id, order }) => {
+                    let order_state = state.clone();
+                    let order_for_task = order.clone();
+                    let order_res = tokio::task::spawn_blocking(move || {
+                        let mut conn = order_state.db.lock().expect("db mutex poisoned");
+                        db::order_drone(&mut conn, player_id, drone_id, &order_for_task)
+                    })
+                    .await?;
+                    let (msg, follow_up) = match order_res {
+                        Ok(OrderOutcome::Ok {
+                            affected,
+                            drones,
+                            inventory,
+                        }) => {
+                            tracing::info!(%peer, session = %session_id, player_id, drone_id, order = %order, "ordered");
+                            (
+                                ServerMsg::OrderResult {
+                                    ok: true,
+                                    reason: None,
+                                    affected,
+                                },
+                                Some(ServerMsg::DroneTick { drones, inventory }),
+                            )
+                        }
+                        Ok(OrderOutcome::Reject(reason)) => {
+                            tracing::debug!(%peer, session = %session_id, drone_id, reason = %reason, "order rejected");
+                            (
+                                ServerMsg::OrderResult {
+                                    ok: false,
+                                    reason: Some(reason),
+                                    affected: 0,
+                                },
+                                None,
+                            )
+                        }
+                        Err(e) => {
+                            tracing::error!(%peer, session = %session_id, error = %e, "order db error");
+                            (
+                                ServerMsg::OrderResult {
+                                    ok: false,
+                                    reason: Some("internal".into()),
+                                    affected: 0,
+                                },
+                                None,
+                            )
+                        }
+                    };
+                    ws.send(Message::Text(protocol::encode(&msg))).await?;
+                    if let Some(f) = follow_up {
+                        ws.send(Message::Text(protocol::encode(&f))).await?;
+                    }
+                }
+                Ok(ClientMsg::OrderAllDrones { order }) => {
+                    let order_state = state.clone();
+                    let order_for_task = order.clone();
+                    let order_res = tokio::task::spawn_blocking(move || {
+                        let mut conn = order_state.db.lock().expect("db mutex poisoned");
+                        db::order_all_drones(&mut conn, player_id, &order_for_task)
+                    })
+                    .await?;
+                    let (msg, follow_up) = match order_res {
+                        Ok(OrderOutcome::Ok {
+                            affected,
+                            drones,
+                            inventory,
+                        }) => {
+                            tracing::info!(%peer, session = %session_id, player_id, affected, order = %order, "ordered all");
+                            (
+                                ServerMsg::OrderResult {
+                                    ok: true,
+                                    reason: None,
+                                    affected,
+                                },
+                                Some(ServerMsg::DroneTick { drones, inventory }),
+                            )
+                        }
+                        Ok(OrderOutcome::Reject(reason)) => (
+                            ServerMsg::OrderResult {
+                                ok: false,
+                                reason: Some(reason),
+                                affected: 0,
+                            },
+                            None,
+                        ),
+                        Err(e) => {
+                            tracing::error!(%peer, session = %session_id, error = %e, "order all db error");
+                            (
+                                ServerMsg::OrderResult {
+                                    ok: false,
+                                    reason: Some("internal".into()),
+                                    affected: 0,
+                                },
+                                None,
+                            )
+                        }
+                    };
+                    ws.send(Message::Text(protocol::encode(&msg))).await?;
+                    if let Some(f) = follow_up {
+                        ws.send(Message::Text(protocol::encode(&f))).await?;
+                    }
+                }
                 Err(e) => {
                     tracing::debug!(%peer, session = %session_id, error = %e, raw = %t, "bad client msg");
                 }
@@ -165,9 +376,12 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
                 tracing::warn!(%peer, session = %session_id, error = %e, "ws error");
                 break;
             }
+                }
+            }
         }
     }
 
+    tick_handle.abort();
     tracing::info!(%peer, session = %session_id, "closed");
     Ok(())
 }

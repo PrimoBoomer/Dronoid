@@ -8,9 +8,13 @@ use std::path::Path;
 use crate::world::gen::{
     gen_solar_system, BELT_K, BLACK_HOLE_ID, BODY_OMEGA_VERSION, MOON_K, ORBIT_K,
 };
-use crate::world::types::{Asteroid, AsteroidKind, BlackHole, Inventory, SolarSystem, StarLite};
+use crate::world::types::{
+    Asteroid, AsteroidKind, BlackHole, Drone, Factory, Inventory, SolarSystem, StarLite,
+    DRONE_COST, DRONE_FORMATION_HEIGHT, DRONE_FORMATION_RADIUS, DRONE_MINE_AMOUNT,
+    DRONE_MINE_INTERVAL_MS, DRONE_MINE_RANGE, DRONE_RETURN_TOLERANCE, DRONE_SPEED, FACTORY_COST,
+};
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "5";
 const BLACK_HOLE_RADIUS: f32 = 200.0;
 const BLACK_HOLE_COLOR: [f32; 3] = [0.05, 0.0, 0.08];
 
@@ -27,7 +31,7 @@ pub fn open(path: &Path) -> Result<Db> {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
 
     if !existed {
-        migrate_v3(&conn)?;
+        migrate_fresh(&conn)?;
         let seed: u64 = rand::random();
         conn.execute(
             "INSERT INTO meta(key, value) VALUES('schema_version', ?1)",
@@ -62,6 +66,23 @@ pub fn open(path: &Path) -> Result<Db> {
             tracing::info!("migrating schema v2 -> v3");
             migrate_v2_to_v3(&conn)?;
             tracing::info!("migration v2 -> v3 done");
+            tracing::info!("migrating schema v3 -> v4");
+            migrate_v3_to_v4(&conn)?;
+            tracing::info!("migration v3 -> v4 done");
+            tracing::info!("migrating schema v4 -> v5");
+            migrate_v4_to_v5(&conn)?;
+            tracing::info!("migration v4 -> v5 done");
+        } else if v == "3" {
+            tracing::info!("migrating schema v3 -> v4");
+            migrate_v3_to_v4(&conn)?;
+            tracing::info!("migration v3 -> v4 done");
+            tracing::info!("migrating schema v4 -> v5");
+            migrate_v4_to_v5(&conn)?;
+            tracing::info!("migration v4 -> v5 done");
+        } else if v == "4" {
+            tracing::info!("migrating schema v4 -> v5");
+            migrate_v4_to_v5(&conn)?;
+            tracing::info!("migration v4 -> v5 done");
         } else if v != SCHEMA_VERSION {
             bail!(
                 "incompatible schema version (db={}, expected={}). Dev mode: delete galaxy.sqlite (and -shm/-wal) and restart.",
@@ -84,7 +105,7 @@ pub fn open(path: &Path) -> Result<Db> {
     Ok(Db { conn, galaxy_seed })
 }
 
-fn migrate_v3(conn: &Connection) -> Result<()> {
+fn migrate_fresh(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE meta (
@@ -142,7 +163,75 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
             amount    INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (player_id, kind)
         );
+        CREATE TABLE player_drones (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id       INTEGER NOT NULL REFERENCES players(id),
+            kind            TEXT NOT NULL,
+            created_at      TEXT NOT NULL,
+            pos_x           REAL NOT NULL DEFAULT 0,
+            pos_y           REAL NOT NULL DEFAULT 0,
+            pos_z           REAL NOT NULL DEFAULT 0,
+            state           TEXT NOT NULL DEFAULT 'idle',
+            target_asteroid INTEGER NULL
+        );
+        CREATE INDEX idx_player_drones_player ON player_drones(player_id);
+        CREATE TABLE player_factories (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id  INTEGER NOT NULL REFERENCES players(id),
+            kind       TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            pos_x      REAL NOT NULL,
+            pos_y      REAL NOT NULL,
+            pos_z      REAL NOT NULL
+        );
+        CREATE INDEX idx_player_factories_player ON player_factories(player_id);
         "#,
+    )?;
+    Ok(())
+}
+
+fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS player_drones (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id       INTEGER NOT NULL REFERENCES players(id),
+            kind            TEXT NOT NULL,
+            created_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_player_drones_player ON player_drones(player_id);
+        CREATE TABLE IF NOT EXISTS player_factories (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id  INTEGER NOT NULL REFERENCES players(id),
+            kind       TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            pos_x      REAL NOT NULL,
+            pos_y      REAL NOT NULL,
+            pos_z      REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_player_factories_player ON player_factories(player_id);
+        "#,
+    )?;
+    conn.execute(
+        "UPDATE meta SET value = '4' WHERE key = 'schema_version'",
+        [],
+    )?;
+    Ok(())
+}
+
+fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        ALTER TABLE player_drones ADD COLUMN pos_x REAL NOT NULL DEFAULT 0;
+        ALTER TABLE player_drones ADD COLUMN pos_y REAL NOT NULL DEFAULT 0;
+        ALTER TABLE player_drones ADD COLUMN pos_z REAL NOT NULL DEFAULT 0;
+        ALTER TABLE player_drones ADD COLUMN state TEXT NOT NULL DEFAULT 'idle';
+        ALTER TABLE player_drones ADD COLUMN target_asteroid INTEGER NULL;
+        "#,
+    )?;
+    conn.execute(
+        "UPDATE meta SET value = '5' WHERE key = 'schema_version'",
+        [],
     )?;
     Ok(())
 }
@@ -288,8 +377,8 @@ fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
     }
 
     conn.execute(
-        "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
-        params![SCHEMA_VERSION],
+        "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
+        [],
     )?;
     Ok(())
 }
@@ -303,6 +392,8 @@ pub struct PlayerSpawn {
     pub inventory: Inventory,
     pub position: [f32; 3],
     pub first_time: bool,
+    pub drones: Vec<Drone>,
+    pub factories: Vec<Factory>,
 }
 
 pub fn get_or_create_player_spawn(
@@ -407,6 +498,8 @@ pub fn get_or_create_player_spawn(
     let black_hole = load_black_hole(&tx)?;
     let far_stars = load_far_stars(&tx, sys_id)?;
     let inventory = load_inventory_tx(&tx, player_id)?;
+    let drones = load_drones_tx(&tx, player_id)?;
+    let factories = load_factories_tx(&tx, player_id)?;
 
     tx.commit()?;
 
@@ -419,6 +512,8 @@ pub fn get_or_create_player_spawn(
         inventory,
         position: [x, y, z],
         first_time,
+        drones,
+        factories,
     })
 }
 
@@ -612,4 +707,590 @@ pub fn mine_asteroid(
 #[allow(dead_code)]
 pub fn load_inventory(conn: &Connection, player_id: i64) -> Result<Inventory> {
     load_inventory_conn(conn, player_id)
+}
+
+fn load_drones_tx(tx: &Transaction, player_id: i64) -> Result<Vec<Drone>> {
+    let mut stmt = tx.prepare(
+        "SELECT id, kind, created_at, pos_x, pos_y, pos_z, state, target_asteroid \
+         FROM player_drones WHERE player_id = ?1 ORDER BY id",
+    )?;
+    let rows = stmt.query_map(params![player_id], |r| {
+        Ok(Drone {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            created_at: r.get(2)?,
+            position: [r.get(3)?, r.get(4)?, r.get(5)?],
+            state: r.get(6)?,
+            target_asteroid: r.get(7)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn load_drones_conn(conn: &Connection, player_id: i64) -> Result<Vec<Drone>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, created_at, pos_x, pos_y, pos_z, state, target_asteroid \
+         FROM player_drones WHERE player_id = ?1 ORDER BY id",
+    )?;
+    let rows = stmt.query_map(params![player_id], |r| {
+        Ok(Drone {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            created_at: r.get(2)?,
+            position: [r.get(3)?, r.get(4)?, r.get(5)?],
+            state: r.get(6)?,
+            target_asteroid: r.get(7)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn load_factories_tx(tx: &Transaction, player_id: i64) -> Result<Vec<Factory>> {
+    let mut stmt = tx.prepare(
+        "SELECT id, kind, created_at, pos_x, pos_y, pos_z FROM player_factories WHERE player_id = ?1 ORDER BY id",
+    )?;
+    let rows = stmt.query_map(params![player_id], |r| {
+        Ok(Factory {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            created_at: r.get(2)?,
+            position: [r.get(3)?, r.get(4)?, r.get(5)?],
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub enum BuildOutcome {
+    Ok {
+        inventory: Inventory,
+        drones: Vec<Drone>,
+        factories: Vec<Factory>,
+    },
+    Insufficient {
+        inventory: Inventory,
+        drones: Vec<Drone>,
+        factories: Vec<Factory>,
+    },
+    UnknownItem,
+}
+
+pub fn build_item(conn: &mut Connection, player_id: i64, item: &str) -> Result<BuildOutcome> {
+    let costs: &[(AsteroidKind, i64)] = match item {
+        "drone" => DRONE_COST,
+        "factory" => FACTORY_COST,
+        _ => return Ok(BuildOutcome::UnknownItem),
+    };
+
+    let tx = conn.transaction()?;
+
+    let mut inv = load_inventory_tx(&tx, player_id)?;
+    if !inv.try_consume(costs) {
+        let drones = load_drones_tx(&tx, player_id)?;
+        let factories = load_factories_tx(&tx, player_id)?;
+        tx.commit()?;
+        return Ok(BuildOutcome::Insufficient {
+            inventory: inv,
+            drones,
+            factories,
+        });
+    }
+
+    {
+        let mut up = tx.prepare(
+            "INSERT INTO player_inventory(player_id, kind, amount) VALUES(?1, ?2, ?3)
+             ON CONFLICT(player_id, kind) DO UPDATE SET amount = excluded.amount",
+        )?;
+        for (k, _) in costs {
+            up.execute(params![player_id, k.as_str(), inv.get(*k)])?;
+        }
+    }
+
+    let now = Utc::now().to_rfc3339();
+    match item {
+        "drone" => {
+            let (px, py, pz): (f32, f32, f32) = tx.query_row(
+                "SELECT x, y, z FROM player_state WHERE player_id = ?1",
+                params![player_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            tx.execute(
+                "INSERT INTO player_drones(player_id, kind, created_at, pos_x, pos_y, pos_z, state) \
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'idle')",
+                params![player_id, "miner", now, px, py + DRONE_FORMATION_HEIGHT, pz],
+            )?;
+        }
+        "factory" => {
+            let (x, y, z): (f32, f32, f32) = tx.query_row(
+                "SELECT x, y, z FROM player_state WHERE player_id = ?1",
+                params![player_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            tx.execute(
+                "INSERT INTO player_factories(player_id, kind, created_at, pos_x, pos_y, pos_z) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![player_id, "drone_factory", now, x, y, z],
+            )?;
+        }
+        _ => unreachable!(),
+    }
+
+    let inventory = load_inventory_tx(&tx, player_id)?;
+    let drones = load_drones_tx(&tx, player_id)?;
+    let factories = load_factories_tx(&tx, player_id)?;
+    tx.commit()?;
+    Ok(BuildOutcome::Ok {
+        inventory,
+        drones,
+        factories,
+    })
+}
+
+pub enum OrderOutcome {
+    Ok {
+        affected: usize,
+        drones: Vec<Drone>,
+        inventory: Inventory,
+    },
+    Reject(String),
+}
+
+pub fn order_drone(
+    conn: &mut Connection,
+    player_id: i64,
+    drone_id: i64,
+    order: &str,
+) -> Result<OrderOutcome> {
+    let tx = conn.transaction()?;
+    let player_system: i64 = tx.query_row(
+        "SELECT system_id FROM player_state WHERE player_id = ?1",
+        params![player_id],
+        |r| r.get(0),
+    )?;
+    let drone_row: Option<(i64,)> = tx
+        .query_row(
+            "SELECT id FROM player_drones WHERE id = ?1 AND player_id = ?2",
+            params![drone_id, player_id],
+            |r| Ok((r.get(0)?,)),
+        )
+        .optional()?;
+    if drone_row.is_none() {
+        tx.commit()?;
+        return Ok(OrderOutcome::Reject("drone_not_found".into()));
+    }
+
+    let now_secs: f32 = (Utc::now().timestamp_millis() as f64 / 1000.0) as f32;
+    let affected = match order {
+        "mine_nearest" => {
+            let (px, py, pz): (f32, f32, f32) = tx.query_row(
+                "SELECT x, y, z FROM player_state WHERE player_id = ?1",
+                params![player_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            match nearest_alive_asteroid(&tx, player_system, [px, py, pz], now_secs)? {
+                Some(aid) => {
+                    tx.execute(
+                        "UPDATE player_drones SET state = 'to_target', target_asteroid = ?1 WHERE id = ?2",
+                        params![aid, drone_id],
+                    )?;
+                    1usize
+                }
+                None => {
+                    tx.commit()?;
+                    return Ok(OrderOutcome::Reject("no_asteroid".into()));
+                }
+            }
+        }
+        "idle" => {
+            tx.execute(
+                "UPDATE player_drones SET state = 'returning', target_asteroid = NULL WHERE id = ?1",
+                params![drone_id],
+            )?;
+            1usize
+        }
+        _ => {
+            tx.commit()?;
+            return Ok(OrderOutcome::Reject("unknown_order".into()));
+        }
+    };
+    let drones = load_drones_tx(&tx, player_id)?;
+    let inventory = load_inventory_tx(&tx, player_id)?;
+    tx.commit()?;
+    Ok(OrderOutcome::Ok {
+        affected,
+        drones,
+        inventory,
+    })
+}
+
+pub fn order_all_drones(
+    conn: &mut Connection,
+    player_id: i64,
+    order: &str,
+) -> Result<OrderOutcome> {
+    let tx = conn.transaction()?;
+    let player_system: i64 = tx.query_row(
+        "SELECT system_id FROM player_state WHERE player_id = ?1",
+        params![player_id],
+        |r| r.get(0),
+    )?;
+    let now_secs: f32 = (Utc::now().timestamp_millis() as f64 / 1000.0) as f32;
+
+    let mut affected: usize = 0;
+    match order {
+        "mine_nearest" => {
+            let (px, py, pz): (f32, f32, f32) = tx.query_row(
+                "SELECT x, y, z FROM player_state WHERE player_id = ?1",
+                params![player_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            let drone_ids: Vec<i64> = {
+                let mut stmt = tx.prepare(
+                    "SELECT id FROM player_drones WHERE player_id = ?1 AND state IN ('idle', 'returning')",
+                )?;
+                let it = stmt.query_map(params![player_id], |r| r.get::<_, i64>(0))?;
+                let mut v = Vec::new();
+                for row in it {
+                    v.push(row?);
+                }
+                v
+            };
+            for did in drone_ids {
+                if let Some(aid) =
+                    nearest_alive_asteroid(&tx, player_system, [px, py, pz], now_secs)?
+                {
+                    tx.execute(
+                        "UPDATE player_drones SET state = 'to_target', target_asteroid = ?1 WHERE id = ?2",
+                        params![aid, did],
+                    )?;
+                    affected += 1;
+                }
+            }
+        }
+        "idle" => {
+            let n = tx.execute(
+                "UPDATE player_drones SET state = 'returning', target_asteroid = NULL \
+                 WHERE player_id = ?1 AND state IN ('to_target', 'mining')",
+                params![player_id],
+            )?;
+            affected = n;
+        }
+        _ => {
+            tx.commit()?;
+            return Ok(OrderOutcome::Reject("unknown_order".into()));
+        }
+    }
+    let drones = load_drones_tx(&tx, player_id)?;
+    let inventory = load_inventory_tx(&tx, player_id)?;
+    tx.commit()?;
+    Ok(OrderOutcome::Ok {
+        affected,
+        drones,
+        inventory,
+    })
+}
+
+fn asteroid_world_pos(orbit_radius: f32, orbit_y: f32, phase: f32, omega: f32, t: f32) -> [f32; 3] {
+    let angle = phase + omega * t;
+    [
+        angle.cos() * orbit_radius,
+        orbit_y,
+        angle.sin() * orbit_radius,
+    ]
+}
+
+fn nearest_alive_asteroid(
+    tx: &Transaction,
+    system_id: i64,
+    from: [f32; 3],
+    t: f32,
+) -> Result<Option<i64>> {
+    let mut stmt = tx.prepare(
+        "SELECT id, orbit_radius, orbit_y, phase, omega, stock FROM asteroids WHERE system_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![system_id], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, f32>(1)?,
+            r.get::<_, f32>(2)?,
+            r.get::<_, f32>(3)?,
+            r.get::<_, f32>(4)?,
+            r.get::<_, i32>(5)?,
+        ))
+    })?;
+    let mut best_id: Option<i64> = None;
+    let mut best_d2: f32 = f32::INFINITY;
+    for row in rows {
+        let (id, r, y, phase, omega, stock) = row?;
+        if stock <= 0 {
+            continue;
+        }
+        let p = asteroid_world_pos(r, y, phase, omega, t);
+        let dx = p[0] - from[0];
+        let dy = p[1] - from[1];
+        let dz = p[2] - from[2];
+        let d2 = dx * dx + dy * dy + dz * dz;
+        if d2 < best_d2 {
+            best_d2 = d2;
+            best_id = Some(id);
+        }
+    }
+    Ok(best_id)
+}
+
+pub struct DroneTickResult {
+    pub drones: Vec<Drone>,
+    pub inventory: Inventory,
+    pub changed: bool,
+}
+
+pub fn tick_drones(conn: &mut Connection, player_id: i64, dt: f32) -> Result<DroneTickResult> {
+    let tx = conn.transaction()?;
+    let (player_system, px, py, pz): (i64, f32, f32, f32) = tx.query_row(
+        "SELECT system_id, x, y, z FROM player_state WHERE player_id = ?1",
+        params![player_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    let now_ms = Utc::now().timestamp_millis();
+    let now_secs: f32 = (now_ms as f64 / 1000.0) as f32;
+
+    let mut drones = load_drones_tx(&tx, player_id)?;
+    if drones.is_empty() {
+        let inventory = load_inventory_tx(&tx, player_id)?;
+        tx.commit()?;
+        return Ok(DroneTickResult {
+            drones,
+            inventory,
+            changed: false,
+        });
+    }
+
+    let total = drones.len();
+    let mut changed = false;
+    let speed = DRONE_SPEED * dt;
+
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..total {
+        let mut d = drones[i].clone();
+        let slot_angle = std::f32::consts::TAU * (i as f32) / (total.max(1) as f32);
+        let slot_pos: [f32; 3] = [
+            px + slot_angle.cos() * DRONE_FORMATION_RADIUS,
+            py + DRONE_FORMATION_HEIGHT,
+            pz + slot_angle.sin() * DRONE_FORMATION_RADIUS,
+        ];
+
+        match d.state.as_str() {
+            "idle" => {
+                if d.position != slot_pos {
+                    d.position = slot_pos;
+                    changed = true;
+                }
+            }
+            "to_target" => {
+                let aid = match d.target_asteroid {
+                    Some(a) => a,
+                    None => {
+                        d.state = "returning".into();
+                        changed = true;
+                        drones[i] = d;
+                        continue;
+                    }
+                };
+                let ast: Option<(f32, f32, f32, f32, i32)> = tx
+                    .query_row(
+                        "SELECT orbit_radius, orbit_y, phase, omega, stock FROM asteroids \
+                         WHERE id = ?1 AND system_id = ?2",
+                        params![aid, player_system],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                    )
+                    .optional()?;
+                let (r, y, phase, omega, stock) = match ast {
+                    Some(t) => t,
+                    None => {
+                        d.state = "returning".into();
+                        d.target_asteroid = None;
+                        changed = true;
+                        drones[i] = d;
+                        continue;
+                    }
+                };
+                if stock <= 0 {
+                    d.state = "returning".into();
+                    d.target_asteroid = None;
+                    changed = true;
+                    drones[i] = d;
+                    continue;
+                }
+                let target = asteroid_world_pos(r, y, phase, omega, now_secs);
+                let (npos, dist_after) = step_toward(d.position, target, speed);
+                d.position = npos;
+                let dx = target[0] - npos[0];
+                let dy = target[1] - npos[1];
+                let dz = target[2] - npos[2];
+                let dist_now = (dx * dx + dy * dy + dz * dz).sqrt();
+                let _ = dist_after;
+                if dist_now <= DRONE_MINE_RANGE {
+                    d.state = "mining".into();
+                }
+                changed = true;
+            }
+            "mining" => {
+                let aid = match d.target_asteroid {
+                    Some(a) => a,
+                    None => {
+                        d.state = "returning".into();
+                        changed = true;
+                        drones[i] = d;
+                        continue;
+                    }
+                };
+                let ast: Option<(String, i32, f32, f32, f32, f32)> = tx
+                    .query_row(
+                        "SELECT kind, stock, orbit_radius, orbit_y, phase, omega FROM asteroids \
+                         WHERE id = ?1 AND system_id = ?2",
+                        params![aid, player_system],
+                        |r| {
+                            Ok((
+                                r.get(0)?,
+                                r.get(1)?,
+                                r.get(2)?,
+                                r.get(3)?,
+                                r.get(4)?,
+                                r.get(5)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let (kind_str, stock, r, y, phase, omega) = match ast {
+                    Some(t) => t,
+                    None => {
+                        d.state = "returning".into();
+                        d.target_asteroid = None;
+                        changed = true;
+                        drones[i] = d;
+                        continue;
+                    }
+                };
+                let target = asteroid_world_pos(r, y, phase, omega, now_secs);
+                let dx = target[0] - d.position[0];
+                let dy = target[1] - d.position[1];
+                let dz = target[2] - d.position[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if dist > DRONE_MINE_RANGE * 1.2 {
+                    d.state = "to_target".into();
+                    changed = true;
+                    drones[i] = d;
+                    continue;
+                }
+                let last_key = format!("drone_last_mine_{}", d.id);
+                let last: i64 = tx
+                    .query_row(
+                        "SELECT value FROM meta WHERE key = ?1",
+                        params![&last_key],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0);
+                if now_ms - last >= DRONE_MINE_INTERVAL_MS {
+                    let gained = DRONE_MINE_AMOUNT.min(stock);
+                    let new_stock = stock - gained;
+                    let kind = AsteroidKind::from_str(&kind_str).unwrap_or(AsteroidKind::Iron);
+                    tx.execute(
+                        "INSERT INTO player_inventory(player_id, kind, amount) VALUES(?1, ?2, ?3) \
+                         ON CONFLICT(player_id, kind) DO UPDATE SET amount = amount + excluded.amount",
+                        params![player_id, kind.as_str(), gained as i64],
+                    )?;
+                    if new_stock <= 0 {
+                        tx.execute("DELETE FROM asteroids WHERE id = ?1", params![aid])?;
+                        d.state = "returning".into();
+                        d.target_asteroid = None;
+                    } else {
+                        tx.execute(
+                            "UPDATE asteroids SET stock = ?1 WHERE id = ?2",
+                            params![new_stock, aid],
+                        )?;
+                    }
+                    tx.execute(
+                        "INSERT INTO meta(key, value) VALUES(?1, ?2) \
+                         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        params![&last_key, now_ms.to_string()],
+                    )?;
+                    changed = true;
+                }
+            }
+            "returning" => {
+                let (npos, _) = step_toward(d.position, slot_pos, speed);
+                d.position = npos;
+                let dx = slot_pos[0] - npos[0];
+                let dy = slot_pos[1] - npos[1];
+                let dz = slot_pos[2] - npos[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if dist <= DRONE_RETURN_TOLERANCE {
+                    d.state = "idle".into();
+                    d.target_asteroid = None;
+                }
+                changed = true;
+            }
+            _ => {
+                d.state = "idle".into();
+                changed = true;
+            }
+        }
+        drones[i] = d;
+    }
+
+    if changed {
+        let mut up = tx.prepare(
+            "UPDATE player_drones SET pos_x = ?1, pos_y = ?2, pos_z = ?3, state = ?4, target_asteroid = ?5 WHERE id = ?6",
+        )?;
+        for d in &drones {
+            up.execute(params![
+                d.position[0],
+                d.position[1],
+                d.position[2],
+                d.state,
+                d.target_asteroid,
+                d.id
+            ])?;
+        }
+    }
+
+    let inventory = load_inventory_tx(&tx, player_id)?;
+    tx.commit()?;
+    Ok(DroneTickResult {
+        drones,
+        inventory,
+        changed,
+    })
+}
+
+fn step_toward(from: [f32; 3], to: [f32; 3], step: f32) -> ([f32; 3], f32) {
+    let dx = to[0] - from[0];
+    let dy = to[1] - from[1];
+    let dz = to[2] - from[2];
+    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+    if dist <= step || dist < 0.0001 {
+        return (to, 0.0);
+    }
+    let inv = step / dist;
+    (
+        [from[0] + dx * inv, from[1] + dy * inv, from[2] + dz * inv],
+        dist - step,
+    )
+}
+
+#[allow(dead_code)]
+pub fn load_drones(conn: &Connection, player_id: i64) -> Result<Vec<Drone>> {
+    load_drones_conn(conn, player_id)
 }

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::world::types::{Asteroid, AsteroidKind, BlackHole, Inventory, SolarSystem, StarLite};
+use crate::world::types::{
+    Asteroid, AsteroidKind, BlackHole, Drone, Factory, Inventory, SolarSystem, StarLite,
+};
 
 pub const SERVER_VERSION: &str = "0.0.3";
 
@@ -13,6 +15,16 @@ pub enum ClientMsg {
     },
     Mine {
         asteroid_id: i64,
+    },
+    Build {
+        item: String,
+    },
+    OrderDrone {
+        drone_id: i64,
+        order: String,
+    },
+    OrderAllDrones {
+        order: String,
     },
 }
 
@@ -32,6 +44,8 @@ pub enum ServerMsg {
         inventory: Inventory,
         position: [f32; 3],
         first_time: bool,
+        drones: Vec<Drone>,
+        factories: Vec<Factory>,
     },
     MineTick {
         asteroid_id: i64,
@@ -49,6 +63,23 @@ pub enum ServerMsg {
     MineReject {
         asteroid_id: i64,
         reason: String,
+    },
+    BuildResult {
+        ok: bool,
+        item: String,
+        reason: Option<String>,
+        inventory: Inventory,
+        drones: Vec<Drone>,
+        factories: Vec<Factory>,
+    },
+    DroneTick {
+        drones: Vec<Drone>,
+        inventory: Inventory,
+    },
+    OrderResult {
+        ok: bool,
+        reason: Option<String>,
+        affected: usize,
     },
     Error {
         code: String,

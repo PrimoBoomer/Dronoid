@@ -10,6 +10,9 @@ signal spawned(spawn: Dictionary)
 signal mine_tick(payload: Dictionary)
 signal asteroid_depleted(payload: Dictionary)
 signal mine_reject(payload: Dictionary)
+signal build_result(payload: Dictionary)
+signal drone_tick(payload: Dictionary)
+signal order_result(payload: Dictionary)
 
 var current_spawn: Dictionary = {}
 
@@ -98,6 +101,12 @@ func _process(_delta: float) -> void:
 					asteroid_depleted.emit(dict)
 				"mine_reject":
 					mine_reject.emit(dict)
+				"build_result":
+					build_result.emit(dict)
+				"drone_tick":
+					drone_tick.emit(dict)
+				"order_result":
+					order_result.emit(dict)
 				"error":
 					failed.emit(String(dict.get("message", "server error")))
 					disconnect_now()
@@ -118,6 +127,15 @@ func _process(_delta: float) -> void:
 
 func send_mine(asteroid_id: int) -> bool:
 	return send_msg({"type": "mine", "asteroid_id": asteroid_id})
+
+func send_build(item: String) -> bool:
+	return send_msg({"type": "build", "item": item})
+
+func send_order_drone(drone_id: int, order: String) -> bool:
+	return send_msg({"type": "order_drone", "drone_id": drone_id, "order": order})
+
+func send_order_all_drones(order: String) -> bool:
+	return send_msg({"type": "order_all_drones", "order": order})
 
 func server_now_ms() -> int:
 	var local_ms := int(Time.get_unix_time_from_system() * 1000.0)

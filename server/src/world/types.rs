@@ -106,6 +106,66 @@ impl Inventory {
             AsteroidKind::Ice => self.ice += amount,
         }
     }
+
+    pub fn get(&self, kind: AsteroidKind) -> i64 {
+        match kind {
+            AsteroidKind::Iron => self.iron,
+            AsteroidKind::Copper => self.copper,
+            AsteroidKind::Silicon => self.silicon,
+            AsteroidKind::Ice => self.ice,
+        }
+    }
+
+    pub fn try_consume(&mut self, costs: &[(AsteroidKind, i64)]) -> bool {
+        for &(kind, amount) in costs {
+            if self.get(kind) < amount {
+                return false;
+            }
+        }
+        for &(kind, amount) in costs {
+            self.add(kind, -amount);
+        }
+        true
+    }
+}
+
+pub const DRONE_COST: &[(AsteroidKind, i64)] = &[
+    (AsteroidKind::Iron, 20),
+    (AsteroidKind::Copper, 10),
+    (AsteroidKind::Silicon, 5),
+];
+
+pub const FACTORY_COST: &[(AsteroidKind, i64)] = &[
+    (AsteroidKind::Iron, 200),
+    (AsteroidKind::Copper, 100),
+    (AsteroidKind::Silicon, 80),
+    (AsteroidKind::Ice, 50),
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Drone {
+    pub id: i64,
+    pub kind: String,
+    pub created_at: String,
+    pub position: [f32; 3],
+    pub state: String,
+    pub target_asteroid: Option<i64>,
+}
+
+pub const DRONE_SPEED: f32 = 22.0;
+pub const DRONE_MINE_RANGE: f32 = 8.0;
+pub const DRONE_MINE_INTERVAL_MS: i64 = 200;
+pub const DRONE_MINE_AMOUNT: i32 = 2;
+pub const DRONE_FORMATION_RADIUS: f32 = 6.0;
+pub const DRONE_FORMATION_HEIGHT: f32 = 1.2;
+pub const DRONE_RETURN_TOLERANCE: f32 = 1.5;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Factory {
+    pub id: i64,
+    pub kind: String,
+    pub created_at: String,
+    pub position: [f32; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

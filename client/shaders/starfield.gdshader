@@ -55,9 +55,9 @@ vec3 star_layer(vec2 uv, float scale, float seed) {
 	float d = length(fp - star_pos);
 
 	float rarity = (h.x - density) / (1.0 - density);
-	float core = 0.06 + rarity * 0.12;
-	float halo = core * 4.5;
-	float intensity = smoothstep(halo, 0.0, d) * 0.35 + smoothstep(core, 0.0, d);
+	float core = 0.11 + rarity * 0.22;
+	float halo = core * 4.0;
+	float intensity = smoothstep(halo, 0.0, d) * 0.45 + smoothstep(core, 0.0, d);
 
 	vec3 color = vec3(1.0);
 	if (h.z > 0.985) {

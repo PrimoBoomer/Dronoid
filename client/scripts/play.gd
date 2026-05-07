@@ -7,6 +7,9 @@ extends Node3D
 @export var camera_lag: float = 6.0
 @export var camera_offset: Vector3 = Vector3(0.0, 6.0, 28.0)
 
+const ORBIT_SENSITIVITY: float = 0.0035
+const ORBIT_PITCH_LIMIT: float = 1.35
+
 const PLANET_VISUAL_SCALE: float = 3.5
 const MOON_VISUAL_SCALE: float = 4.5
 const ASTEROID_VISUAL_SCALE: float = 4.0
@@ -56,9 +59,13 @@ const AUTOPILOT_BRAKE_SAFETY: float = 1.2
 const AUTOPILOT_CANCEL_MOUSE: float = 80.0
 
 var _alt_held: bool = false
+var _orbit_active: bool = false
+var _orbit_yaw: float = 0.0
+var _orbit_pitch: float = 0.0
+var _orbit_distance: float = 28.0
 var _last_mine_ms: int = 0
 var _beam_mi: MeshInstance3D = null
-var _beam_mesh: ImmediateMesh = null
+var _beam_impact: MeshInstance3D = null
 
 var _action_kind: String = ""
 var _action_target_kind: String = ""
@@ -68,6 +75,7 @@ var _action_stop_distance: float = 0.0
 var _action_pending_mine: bool = false
 var _autopilot_mouse_accum: float = 0.0
 var _mining: bool = false
+var _mining_target_idx: int = -1
 var _current_target_idx: int = -1
 
 var _hover_target_kind: String = ""
@@ -113,6 +121,83 @@ const ASTEROID_KIND_LABEL := {
 	"ice": "Glace",
 }
 
+const KIND_POPUP_COLOR := {
+	"iron":    Color(1.00, 0.78, 0.55),
+	"copper":  Color(1.00, 0.65, 0.30),
+	"silicon": Color(0.75, 0.90, 1.00),
+	"ice":     Color(0.85, 0.97, 1.00),
+}
+
+const UI_BG := Color(0.04, 0.06, 0.12, 0.92)
+const UI_BG_SOLID := Color(0.05, 0.07, 0.14, 0.96)
+const UI_BORDER := Color(0.40, 0.65, 1.00, 0.85)
+const UI_BORDER_SOFT := Color(0.30, 0.50, 0.85, 0.45)
+const UI_TITLE := Color(0.88, 0.94, 1.00)
+const UI_TEXT := Color(0.80, 0.88, 0.96)
+const UI_SUBTLE := Color(0.55, 0.72, 0.92)
+const UI_BTN_NORMAL := Color(0.20, 0.40, 0.85, 0.85)
+const UI_BTN_HOVER := Color(0.30, 0.55, 1.00, 0.95)
+const UI_BTN_PRESSED := Color(0.18, 0.35, 0.75, 1.00)
+const UI_BTN_DISABLED := Color(0.15, 0.20, 0.30, 0.85)
+
+const BEAM_BASE_THICKNESS: float = 0.35
+const BEAM_TIP_THICKNESS: float = 0.18
+const BEAM_PULSE_RATE: float = 9.0
+const BEAM_BASE_EMISSION: float = 4.0
+
+const DRONE_COST := {"iron": 20, "copper": 10, "silicon": 5}
+const FACTORY_COST := {"iron": 200, "copper": 100, "silicon": 80, "ice": 50}
+
+var _inv_state: Dictionary = {"iron": 0, "copper": 0, "silicon": 0, "ice": 0}
+var _drones_state: Array = []
+var _factories_state: Array = []
+
+var _inv_panel_layer: CanvasLayer = null
+var _inv_panel_root: Control = null
+var _inv_panel_visible: bool = false
+var _inv_res_labels: Dictionary = {}
+var _inv_drone_btn: Button = null
+var _inv_factory_btn: Button = null
+var _inv_drone_cost_lbl: Label = null
+var _inv_factory_cost_lbl: Label = null
+var _inv_drones_list: VBoxContainer = null
+var _inv_drones_title: Label = null
+var _inv_factories_list: VBoxContainer = null
+var _inv_factories_title: Label = null
+var _inv_status_lbl: Label = null
+var _inv_order_all_btn: Button = null
+
+var _drone_submenu_layer: CanvasLayer = null
+var _drone_submenu_panel: PanelContainer = null
+var _drone_submenu_vbox: VBoxContainer = null
+var _drone_submenu_drone_id: int = -1
+var _drone_submenu_open: bool = false
+
+var _drone_view_layer: CanvasLayer = null
+var _drone_view_panel: PanelContainer = null
+var _drone_view_info_lbl: Label = null
+var _drone_view_subviewport: SubViewport = null
+var _drone_view_camera: Camera3D = null
+var _drone_view_target_id: int = -1
+var _drone_view_open: bool = false
+
+const DRONE_STATE_LABEL := {
+	"idle": "Inactif",
+	"to_target": "En route",
+	"mining": "En minage",
+	"returning": "Retour",
+}
+
+var _drone_nodes: Array = []
+var _drone_beams: Array = []
+var _factory_nodes: Array = []
+var _drones_anim_phase: float = 0.0
+const DRONE_FORMATION_RADIUS: float = 6.0
+const DRONE_FORMATION_HEIGHT: float = 1.2
+const DRONE_ORBIT_RATE: float = 0.6
+const DRONE_VISUAL_SCALE: float = 1.7
+const DRONE_MINE_RANGE_VISUAL: float = 8.0
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	SkyBackground.set_active(false)
@@ -143,11 +228,21 @@ func _ready() -> void:
 	_build_mining_beam()
 	_build_tooltip_ui()
 	_build_context_menu()
+	_build_inventory_panel()
+	_build_drone_submenu()
+	_build_drone_view()
 	_apply_inventory(spawn.get("inventory", {}) as Dictionary)
+	_drones_state = (spawn.get("drones", []) as Array).duplicate()
+	_factories_state = (spawn.get("factories", []) as Array).duplicate()
+	_refresh_drones_visuals()
+	_refresh_factories_visuals()
 
 	Net.mine_tick.connect(_on_mine_tick)
 	Net.asteroid_depleted.connect(_on_asteroid_depleted)
 	Net.mine_reject.connect(_on_mine_reject)
+	Net.build_result.connect(_on_build_result)
+	Net.drone_tick.connect(_on_drone_tick)
+	Net.order_result.connect(_on_order_result)
 
 func _build_system(star: Dictionary, planets: Array) -> void:
 	var system_root := Node3D.new()
@@ -399,6 +494,61 @@ func _place_ship(spawn: Dictionary, star: Dictionary) -> void:
 	_ship.position = pos
 	_ship.look_at(Vector3.ZERO, Vector3.UP)
 
+func _make_ui_panel_style(corner: int = 10, bg: Color = UI_BG, pad: int = 14) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg
+	s.border_width_left = 1
+	s.border_width_right = 1
+	s.border_width_top = 1
+	s.border_width_bottom = 1
+	s.border_color = UI_BORDER
+	s.corner_radius_top_left = corner
+	s.corner_radius_top_right = corner
+	s.corner_radius_bottom_left = corner
+	s.corner_radius_bottom_right = corner
+	s.content_margin_left = pad
+	s.content_margin_right = pad
+	s.content_margin_top = pad
+	s.content_margin_bottom = pad
+	s.shadow_color = Color(0.10, 0.30, 0.65, 0.30)
+	s.shadow_size = 12
+	s.shadow_offset = Vector2(0, 3)
+	return s
+
+func _style_button(btn: Button) -> void:
+	var base := StyleBoxFlat.new()
+	base.bg_color = UI_BTN_NORMAL
+	base.border_width_left = 1
+	base.border_width_right = 1
+	base.border_width_top = 1
+	base.border_width_bottom = 1
+	base.border_color = UI_BORDER
+	base.corner_radius_top_left = 8
+	base.corner_radius_top_right = 8
+	base.corner_radius_bottom_left = 8
+	base.corner_radius_bottom_right = 8
+	base.content_margin_left = 14
+	base.content_margin_right = 14
+	base.content_margin_top = 8
+	base.content_margin_bottom = 8
+	var hover := base.duplicate() as StyleBoxFlat
+	hover.bg_color = UI_BTN_HOVER
+	var pressed := base.duplicate() as StyleBoxFlat
+	pressed.bg_color = UI_BTN_PRESSED
+	var disabled := base.duplicate() as StyleBoxFlat
+	disabled.bg_color = UI_BTN_DISABLED
+	disabled.border_color = Color(0.30, 0.40, 0.55, 0.45)
+	btn.add_theme_stylebox_override("normal", base)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("focus", hover)
+	btn.add_theme_stylebox_override("disabled", disabled)
+	btn.add_theme_color_override("font_color", UI_TITLE)
+	btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	btn.add_theme_color_override("font_pressed_color", UI_TITLE)
+	btn.add_theme_color_override("font_disabled_color", Color(0.55, 0.62, 0.75))
+	btn.add_theme_font_size_override("font_size", 14)
+
 func _build_pause_menu() -> void:
 	_pause_layer = CanvasLayer.new()
 	_pause_layer.name = "PauseMenu"
@@ -407,7 +557,7 @@ func _build_pause_menu() -> void:
 	add_child(_pause_layer)
 
 	var dim := ColorRect.new()
-	dim.color = Color(0.0, 0.0, 0.0, 0.55)
+	dim.color = Color(0.02, 0.04, 0.10, 0.65)
 	dim.anchor_right = 1.0
 	dim.anchor_bottom = 1.0
 	_pause_layer.add_child(dim)
@@ -417,25 +567,36 @@ func _build_pause_menu() -> void:
 	center.anchor_bottom = 1.0
 	_pause_layer.add_child(center)
 
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(320, 0)
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(14, UI_BG_SOLID, 22))
+	center.add_child(panel)
+
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 12)
-	center.add_child(box)
+	box.add_theme_constant_override("separation", 14)
+	panel.add_child(box)
 
 	var title := Label.new()
 	title.text = "Pause"
-	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", UI_TITLE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
+	var sep := HSeparator.new()
+	box.add_child(sep)
+
 	var resume_btn := Button.new()
 	resume_btn.text = "Reprendre"
-	resume_btn.custom_minimum_size = Vector2(220, 40)
+	resume_btn.custom_minimum_size = Vector2(240, 0)
+	_style_button(resume_btn)
 	resume_btn.pressed.connect(_on_resume_pressed)
 	box.add_child(resume_btn)
 
 	var quit_btn := Button.new()
 	quit_btn.text = "Quitter au menu"
-	quit_btn.custom_minimum_size = Vector2(220, 40)
+	quit_btn.custom_minimum_size = Vector2(240, 0)
+	_style_button(quit_btn)
 	quit_btn.pressed.connect(_on_quit_to_menu_pressed)
 	box.add_child(quit_btn)
 
@@ -477,6 +638,27 @@ func _ideal_cam_transform() -> Transform3D:
 	var up: Vector3 = _ship.global_transform.basis.y
 	return Transform3D(Basis.IDENTITY, ideal_pos).looking_at(_ship.global_position, up)
 
+func _orbit_cam_transform() -> Transform3D:
+	var cp := cos(_orbit_pitch)
+	var dir := Vector3(sin(_orbit_yaw) * cp, sin(_orbit_pitch), cos(_orbit_yaw) * cp)
+	var pos := _ship.global_position + dir * _orbit_distance
+	return Transform3D(Basis.IDENTITY, pos).looking_at(_ship.global_position, Vector3.UP)
+
+func _enter_orbit() -> void:
+	var rel := _cam.global_position - _ship.global_position
+	var dist: float = rel.length()
+	if dist < 1.0:
+		rel = -_ship.global_transform.basis.z * camera_offset.length()
+		dist = rel.length()
+	_orbit_distance = dist
+	var horiz: float = sqrt(rel.x * rel.x + rel.z * rel.z)
+	_orbit_pitch = clampf(atan2(rel.y, horiz), -ORBIT_PITCH_LIMIT, ORBIT_PITCH_LIMIT)
+	_orbit_yaw = atan2(rel.x, rel.z)
+	_orbit_active = true
+
+func _exit_orbit() -> void:
+	_orbit_active = false
+
 func _capture_mouse(capture: bool) -> void:
 	_captured = capture
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED if capture else Input.MOUSE_MODE_VISIBLE)
@@ -485,8 +667,24 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var ke := event as InputEventKey
 		if ke.pressed and ke.keycode == KEY_ESCAPE:
+			if _ctx_open:
+				_close_context_menu()
+				return
+			if _drone_submenu_open:
+				_close_drone_submenu()
+				return
+			if _drone_view_open:
+				_close_drone_view()
+				return
+			if _inv_panel_visible:
+				_toggle_inventory_panel()
+				return
 			_toggle_pause()
 			return
+		if ke.pressed and not ke.echo and ke.keycode == KEY_E:
+			if not _paused and not _ctx_open:
+				_toggle_inventory_panel()
+				return
 	if _paused:
 		return
 	if event is InputEventMouseButton:
@@ -499,14 +697,29 @@ func _input(event: InputEvent) -> void:
 			if mb.pressed and _alt_held and _is_hovering():
 				_open_context_menu(mb.position)
 			return
+		if mb.button_index == MOUSE_BUTTON_MIDDLE:
+			if mb.pressed:
+				if not _alt_held and not _ctx_open and not _inv_panel_visible:
+					_enter_orbit()
+			else:
+				if _orbit_active:
+					_exit_orbit()
+			return
 	if event is InputEventMouseMotion and _captured:
 		var rel: Vector2 = (event as InputEventMouseMotion).relative
+		if _orbit_active:
+			_orbit_yaw -= rel.x * ORBIT_SENSITIVITY
+			_orbit_pitch = clampf(_orbit_pitch + rel.y * ORBIT_SENSITIVITY, -ORBIT_PITCH_LIMIT, ORBIT_PITCH_LIMIT)
+			return
 		_ship.rotate_object_local(Vector3.UP, -rel.x * mouse_sensitivity)
 		_ship.rotate_object_local(Vector3.RIGHT, -rel.y * mouse_sensitivity)
-		if _action_kind == "navigate":
+		if _action_kind == "navigate" or _mining:
 			_autopilot_mouse_accum += rel.length()
 			if _autopilot_mouse_accum >= AUTOPILOT_CANCEL_MOUSE:
-				_cancel_autopilot()
+				if _mining:
+					_cancel_mining()
+				if _action_kind == "navigate":
+					_cancel_autopilot()
 
 func _process(delta: float) -> void:
 	var alt_now := Input.is_key_pressed(KEY_ALT)
@@ -514,6 +727,8 @@ func _process(delta: float) -> void:
 		_alt_held = alt_now
 		if not _paused and not _ctx_open:
 			_capture_mouse(not _alt_held)
+	if _orbit_active and not Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
+		_exit_orbit()
 	if _paused:
 		return
 	var t: float = float(Net.server_now_ms() - _epoch_ms) / 1000.0
@@ -531,17 +746,28 @@ func _process(delta: float) -> void:
 		_hide_tooltip()
 	_update_mining(t)
 	_update_camera(delta)
+	if _drone_nodes.size() > 0:
+		_drones_anim_phase = fposmod(_drones_anim_phase + DRONE_ORBIT_RATE * delta, TAU)
+		_position_drones()
+	if _drone_view_open:
+		_update_drone_view()
 
 func _update_mining(t: float) -> void:
-	if not _mining or _belt_mm == null:
-		_hide_beam()
+	if not _mining or _belt_mm == null or _mining_target_idx < 0:
+		if _mining:
+			_cancel_mining()
+		else:
+			_hide_beam()
 		return
-	var idx := _pick_target(t)
-	_current_target_idx = idx
-	if idx < 0:
-		_hide_beam()
+	var idx := _mining_target_idx
+	if idx >= _belt_alive.size() or _belt_alive[idx] == 0:
+		_cancel_mining()
 		return
 	var target_pos := _world_pos_of_asteroid(idx, t)
+	if _ship.global_position.distance_to(target_pos) > MAX_MINE_RANGE * 1.4:
+		_cancel_mining()
+		return
+	_current_target_idx = idx
 	_show_beam(target_pos)
 	var now_ms := Time.get_ticks_msec()
 	if now_ms - _last_mine_ms >= MINE_INTERVAL_MS:
@@ -588,8 +814,13 @@ func _pick_target(t: float, max_range: float = MAX_MINE_RANGE) -> int:
 	return best_exact_idx if best_exact_idx >= 0 else best_tol_idx
 
 func _update_camera(delta: float) -> void:
-	var ideal := _ideal_cam_transform()
+	var ideal: Transform3D
+	if _orbit_active:
+		ideal = _orbit_cam_transform()
+		_cam.global_transform = ideal
+		return
 	var k: float = 1.0 - exp(-camera_lag * delta)
+	ideal = _ideal_cam_transform()
 	var cur := _cam.global_transform
 	cur.origin = cur.origin.lerp(ideal.origin, k)
 	var a := cur.basis.orthonormalized()
@@ -628,6 +859,13 @@ func _cancel_autopilot() -> void:
 	_action_pending_mine = false
 	_autopilot_mouse_accum = 0.0
 
+func _cancel_mining() -> void:
+	_mining = false
+	_mining_target_idx = -1
+	_current_target_idx = -1
+	_autopilot_mouse_accum = 0.0
+	_hide_beam()
+
 func _autopilot_process(delta: float) -> void:
 	var t := float(Net.server_now_ms() - _epoch_ms) / 1000.0
 	var target_pos := _get_action_target_pos(t)
@@ -648,9 +886,13 @@ func _autopilot_process(delta: float) -> void:
 	var brake_dist := speed * speed / (2.0 * brake_decel) * AUTOPILOT_BRAKE_SAFETY
 	if remaining <= 1.0 and speed < 1.5:
 		_velocity = Vector3.ZERO
-		if _action_pending_mine:
+		if _action_pending_mine and _action_target_kind == "asteroid":
 			_action_pending_mine = false
+			_mining_target_idx = _action_target_idx
 			_mining = true
+			_autopilot_mouse_accum = 0.0
+		else:
+			_action_pending_mine = false
 		_action_kind = ""
 		_action_target_kind = ""
 		_action_target_node = null
@@ -665,6 +907,8 @@ func _autopilot_process(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	if _paused:
 		return
+	if _mining and _captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_cancel_mining()
 	if _action_kind == "navigate":
 		if _captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			_cancel_autopilot()
@@ -689,32 +933,105 @@ func _physics_process(delta: float) -> void:
 	_ship.transform = _ship.transform.orthonormalized()
 
 func _build_mining_beam() -> void:
-	_beam_mesh = ImmediateMesh.new()
 	_beam_mi = MeshInstance3D.new()
 	_beam_mi.name = "MiningBeam"
-	_beam_mi.mesh = _beam_mesh
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = BEAM_TIP_THICKNESS
+	cyl.bottom_radius = BEAM_BASE_THICKNESS
+	cyl.height = 1.0
+	cyl.radial_segments = 14
+	cyl.rings = 1
+	_beam_mi.mesh = cyl
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(1.0, 0.4, 0.2, 1.0)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.55, 0.20, 0.85)
 	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.5, 0.2)
-	mat.emission_energy_multiplier = 3.0
+	mat.emission = Color(1.0, 0.55, 0.22)
+	mat.emission_energy_multiplier = BEAM_BASE_EMISSION
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_beam_mi.material_override = mat
 	_beam_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_beam_mi.visible = false
 	add_child(_beam_mi)
 
+	_beam_impact = MeshInstance3D.new()
+	_beam_impact.name = "MiningImpact"
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.55
+	sphere.height = 1.10
+	sphere.radial_segments = 16
+	sphere.rings = 8
+	_beam_impact.mesh = sphere
+	var im_mat := StandardMaterial3D.new()
+	im_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	im_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	im_mat.albedo_color = Color(1.0, 0.75, 0.35, 0.55)
+	im_mat.emission_enabled = true
+	im_mat.emission = Color(1.0, 0.7, 0.3)
+	im_mat.emission_energy_multiplier = 3.5
+	_beam_impact.material_override = im_mat
+	_beam_impact.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_beam_impact.visible = false
+	add_child(_beam_impact)
+
 func _show_beam(target_world_pos: Vector3) -> void:
-	_beam_mesh.clear_surfaces()
-	_beam_mesh.surface_begin(Mesh.PRIMITIVE_LINES)
-	_beam_mesh.surface_add_vertex(_ship.global_position)
-	_beam_mesh.surface_add_vertex(target_world_pos)
-	_beam_mesh.surface_end()
+	var ship_pos := _ship.global_position
+	var delta_v := target_world_pos - ship_pos
+	var distance := delta_v.length()
+	if distance < 0.05:
+		_beam_mi.visible = false
+		_beam_impact.visible = false
+		return
+	var dir_n := delta_v / distance
+	var up_ref: Vector3 = Vector3.RIGHT if absf(dir_n.y) > 0.99 else Vector3.UP
+	var x_axis := up_ref.cross(dir_n).normalized()
+	var z_axis := dir_n.cross(x_axis).normalized()
+	var t := float(Time.get_ticks_msec()) / 1000.0
+	var pulse: float = 0.85 + 0.30 * sin(t * BEAM_PULSE_RATE)
+	var thickness_pulse: float = 0.92 + 0.16 * sin(t * BEAM_PULSE_RATE * 0.7)
+	var basis := Basis(x_axis * thickness_pulse, dir_n * distance, z_axis * thickness_pulse)
+	var midpoint := ship_pos + delta_v * 0.5
+	_beam_mi.global_transform = Transform3D(basis, midpoint)
+	var mat: StandardMaterial3D = _beam_mi.material_override
+	mat.emission_energy_multiplier = BEAM_BASE_EMISSION * pulse
 	_beam_mi.visible = true
+
+	var impact_scale: float = 0.85 + 0.30 * sin(t * BEAM_PULSE_RATE * 1.3)
+	_beam_impact.global_position = target_world_pos
+	_beam_impact.scale = Vector3.ONE * impact_scale
+	var im_mat: StandardMaterial3D = _beam_impact.material_override
+	im_mat.emission_energy_multiplier = 3.0 + 1.5 * sin(t * BEAM_PULSE_RATE * 1.1)
+	_beam_impact.visible = true
 
 func _hide_beam() -> void:
 	if _beam_mi != null:
 		_beam_mi.visible = false
+	if _beam_impact != null:
+		_beam_impact.visible = false
+
+func _spawn_mine_popup(world_pos: Vector3, kind: String, amount: int) -> void:
+	if amount <= 0:
+		return
+	var label := Label3D.new()
+	var color: Color = KIND_POPUP_COLOR.get(kind, Color.WHITE)
+	label.text = "+%d %s" % [amount, ASTEROID_KIND_LABEL.get(kind, kind)]
+	label.font_size = 36
+	label.outline_size = 8
+	label.outline_modulate = Color(0, 0, 0, 0.9)
+	label.modulate = color
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.fixed_size = false
+	add_child(label)
+	label.global_position = world_pos
+	var rise_to: float = world_pos.y + 4.0
+	var lateral := Vector3(randf_range(-0.6, 0.6), 0.0, randf_range(-0.6, 0.6))
+	label.global_position += lateral
+	var tween := create_tween().set_parallel(true)
+	tween.tween_property(label, "global_position:y", rise_to, 1.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(label, "modulate:a", 0.0, 0.85).set_delay(0.25).set_trans(Tween.TRANS_LINEAR)
+	tween.chain().tween_callback(label.queue_free)
 
 func _build_tooltip_ui() -> void:
 	_tooltip_layer = CanvasLayer.new()
@@ -725,31 +1042,16 @@ func _build_tooltip_ui() -> void:
 	_tooltip_panel.visible = false
 	_tooltip_layer.add_child(_tooltip_panel)
 
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.05, 0.10, 0.88)
-	style.border_width_left   = 1
-	style.border_width_right  = 1
-	style.border_width_top    = 1
-	style.border_width_bottom = 1
-	style.border_color = Color(0.4, 0.6, 1.0, 0.6)
-	style.corner_radius_top_left     = 4
-	style.corner_radius_top_right    = 4
-	style.corner_radius_bottom_left  = 4
-	style.corner_radius_bottom_right = 4
-	style.content_margin_left   = 10
-	style.content_margin_right  = 10
-	style.content_margin_top    = 6
-	style.content_margin_bottom = 6
-	_tooltip_panel.add_theme_stylebox_override("panel", style)
+	_tooltip_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(8, UI_BG, 10))
 
 	_tooltip_label = Label.new()
-	_tooltip_label.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+	_tooltip_label.add_theme_color_override("font_color", UI_TITLE)
 	_tooltip_label.add_theme_font_size_override("font_size", 13)
 	_tooltip_panel.add_child(_tooltip_label)
 
 	_tooltip_connector = Line2D.new()
-	_tooltip_connector.width = 1.0
-	_tooltip_connector.default_color = Color(0.4, 0.6, 1.0, 0.6)
+	_tooltip_connector.width = 1.5
+	_tooltip_connector.default_color = UI_BORDER
 	_tooltip_connector.antialiased = true
 	_tooltip_connector.visible = false
 	_tooltip_layer.add_child(_tooltip_connector)
@@ -880,19 +1182,24 @@ func _make_ctx_button(label: String) -> Button:
 	var btn := Button.new()
 	btn.text = label
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.custom_minimum_size = Vector2(160, 0)
+	btn.custom_minimum_size = Vector2(180, 0)
 	btn.add_theme_font_size_override("font_size", 13)
-	btn.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+	btn.add_theme_color_override("font_color", UI_TITLE)
+	btn.add_theme_color_override("font_hover_color", Color.WHITE)
 	var sn := StyleBoxFlat.new()
 	sn.bg_color = Color(0, 0, 0, 0)
-	sn.content_margin_left = 10
-	sn.content_margin_right = 10
-	sn.content_margin_top = 5
-	sn.content_margin_bottom = 5
+	sn.corner_radius_top_left = 6
+	sn.corner_radius_top_right = 6
+	sn.corner_radius_bottom_left = 6
+	sn.corner_radius_bottom_right = 6
+	sn.content_margin_left = 12
+	sn.content_margin_right = 12
+	sn.content_margin_top = 6
+	sn.content_margin_bottom = 6
 	var sh := sn.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.2, 0.4, 0.9, 0.25)
+	sh.bg_color = Color(0.30, 0.55, 1.00, 0.30)
 	var sp := sn.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.3, 0.5, 1.0, 0.35)
+	sp.bg_color = Color(0.35, 0.60, 1.00, 0.50)
 	btn.add_theme_stylebox_override("normal", sn)
 	btn.add_theme_stylebox_override("hover", sh)
 	btn.add_theme_stylebox_override("pressed", sp)
@@ -907,23 +1214,7 @@ func _build_context_menu() -> void:
 	_ctx_panel = PanelContainer.new()
 	_ctx_panel.visible = false
 	_ctx_layer.add_child(_ctx_panel)
-
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.05, 0.10, 0.92)
-	style.border_width_left   = 1
-	style.border_width_right  = 1
-	style.border_width_top    = 1
-	style.border_width_bottom = 1
-	style.border_color = Color(0.4, 0.6, 1.0, 0.6)
-	style.corner_radius_top_left = 4
-	style.corner_radius_top_right = 4
-	style.corner_radius_bottom_left = 4
-	style.corner_radius_bottom_right = 4
-	style.content_margin_left = 4
-	style.content_margin_right = 4
-	style.content_margin_top = 4
-	style.content_margin_bottom = 4
-	_ctx_panel.add_theme_stylebox_override("panel", style)
+	_ctx_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG_SOLID, 6))
 
 	_ctx_vbox = VBoxContainer.new()
 	_ctx_vbox.add_theme_constant_override("separation", 2)
@@ -984,6 +1275,685 @@ func _on_ctx_mine() -> void:
 	_action_pending_mine = true
 	_action_stop_distance = MAX_MINE_RANGE * 0.7
 
+func _build_inventory_panel() -> void:
+	_inv_panel_layer = CanvasLayer.new()
+	_inv_panel_layer.name = "InventoryLayer"
+	_inv_panel_layer.layer = 20
+	_inv_panel_layer.visible = false
+	add_child(_inv_panel_layer)
+
+	var dim := ColorRect.new()
+	dim.anchor_right = 1.0
+	dim.anchor_bottom = 1.0
+	dim.color = Color(0.02, 0.04, 0.10, 0.65)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_inv_panel_layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.anchor_right = 1.0
+	center.anchor_bottom = 1.0
+	dim.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(560, 0)
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(14, UI_BG_SOLID, 22))
+	center.add_child(panel)
+	_inv_panel_root = panel
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "Inventaire"
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", UI_TITLE)
+	box.add_child(title)
+
+	box.add_child(HSeparator.new())
+
+	var res_title := Label.new()
+	res_title.text = "Ressources"
+	res_title.add_theme_font_size_override("font_size", 16)
+	res_title.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(res_title)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 24)
+	grid.add_theme_constant_override("v_separation", 4)
+	box.add_child(grid)
+	for kind in INV_KINDS:
+		var name_lbl := Label.new()
+		name_lbl.text = String(ASTEROID_KIND_LABEL.get(kind, kind))
+		name_lbl.add_theme_color_override("font_color", UI_TEXT)
+		grid.add_child(name_lbl)
+		var amount_lbl := Label.new()
+		amount_lbl.text = "0"
+		amount_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		amount_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		amount_lbl.add_theme_color_override("font_color", UI_TITLE)
+		grid.add_child(amount_lbl)
+		_inv_res_labels[kind] = amount_lbl
+
+	box.add_child(HSeparator.new())
+
+	var build_title := Label.new()
+	build_title.text = "Construction"
+	build_title.add_theme_font_size_override("font_size", 16)
+	build_title.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(build_title)
+
+	_inv_drone_btn = Button.new()
+	_inv_drone_btn.text = "Construire un drone de minage"
+	_style_button(_inv_drone_btn)
+	_inv_drone_btn.pressed.connect(_on_build_pressed.bind("drone"))
+	box.add_child(_inv_drone_btn)
+	_inv_drone_cost_lbl = Label.new()
+	_inv_drone_cost_lbl.text = _format_cost_line(DRONE_COST)
+	_inv_drone_cost_lbl.add_theme_font_size_override("font_size", 12)
+	box.add_child(_inv_drone_cost_lbl)
+
+	box.add_child(HSeparator.new())
+
+	_inv_drones_title = Label.new()
+	_inv_drones_title.text = "Drones (0)"
+	_inv_drones_title.add_theme_font_size_override("font_size", 16)
+	_inv_drones_title.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(_inv_drones_title)
+
+	_inv_order_all_btn = Button.new()
+	_inv_order_all_btn.text = "Donner ordre à tous : Miner les plus proches"
+	_style_button(_inv_order_all_btn)
+	_inv_order_all_btn.pressed.connect(_on_order_all_pressed)
+	box.add_child(_inv_order_all_btn)
+
+	_inv_drones_list = VBoxContainer.new()
+	_inv_drones_list.add_theme_constant_override("separation", 2)
+	box.add_child(_inv_drones_list)
+
+	box.add_child(HSeparator.new())
+
+	var factory_title := Label.new()
+	factory_title.text = "Avancé"
+	factory_title.add_theme_font_size_override("font_size", 12)
+	factory_title.add_theme_color_override("font_color", Color(0.45, 0.55, 0.70))
+	box.add_child(factory_title)
+
+	_inv_factory_btn = Button.new()
+	_inv_factory_btn.text = "Construire une usine à drones"
+	_style_button(_inv_factory_btn)
+	_inv_factory_btn.add_theme_font_size_override("font_size", 12)
+	_inv_factory_btn.pressed.connect(_on_build_pressed.bind("factory"))
+	box.add_child(_inv_factory_btn)
+	_inv_factory_cost_lbl = Label.new()
+	_inv_factory_cost_lbl.text = _format_cost_line(FACTORY_COST)
+	_inv_factory_cost_lbl.add_theme_font_size_override("font_size", 11)
+	_inv_factory_cost_lbl.add_theme_color_override("font_color", Color(0.50, 0.58, 0.70))
+	box.add_child(_inv_factory_cost_lbl)
+
+	_inv_factories_title = Label.new()
+	_inv_factories_title.text = "Usines (0)"
+	_inv_factories_title.add_theme_font_size_override("font_size", 12)
+	_inv_factories_title.add_theme_color_override("font_color", Color(0.45, 0.55, 0.70))
+	box.add_child(_inv_factories_title)
+	_inv_factories_list = VBoxContainer.new()
+	_inv_factories_list.add_theme_constant_override("separation", 1)
+	box.add_child(_inv_factories_list)
+
+	_inv_status_lbl = Label.new()
+	_inv_status_lbl.text = ""
+	_inv_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_inv_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.5))
+	box.add_child(_inv_status_lbl)
+
+	var hint := Label.new()
+	hint.text = "E pour fermer"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(hint)
+
+func _format_cost_line(costs: Dictionary) -> String:
+	var parts: Array = []
+	for k in costs.keys():
+		parts.append("%d %s" % [int(costs[k]), String(INV_DISPLAY.get(k, k))])
+	return "Coût : " + ", ".join(parts)
+
+func _can_afford(costs: Dictionary) -> bool:
+	for k in costs.keys():
+		if int(_inv_state.get(k, 0)) < int(costs[k]):
+			return false
+	return true
+
+func _toggle_inventory_panel() -> void:
+	_inv_panel_visible = not _inv_panel_visible
+	_inv_panel_layer.visible = _inv_panel_visible
+	if _inv_panel_visible:
+		_inv_status_lbl.text = ""
+		_capture_mouse(false)
+		_refresh_inventory_panel()
+	else:
+		if not _alt_held and not _ctx_open:
+			_capture_mouse(true)
+
+func _refresh_inventory_panel() -> void:
+	for kind in INV_KINDS:
+		if _inv_res_labels.has(kind):
+			(_inv_res_labels[kind] as Label).text = "%d" % int(_inv_state.get(kind, 0))
+
+	var can_drone := _can_afford(DRONE_COST)
+	_inv_drone_btn.disabled = not can_drone
+	_inv_drone_cost_lbl.add_theme_color_override(
+		"font_color",
+		Color(0.55, 0.85, 0.55) if can_drone else Color(0.85, 0.55, 0.55)
+	)
+
+	var can_factory := _can_afford(FACTORY_COST)
+	_inv_factory_btn.disabled = not can_factory
+	_inv_factory_cost_lbl.add_theme_color_override(
+		"font_color",
+		Color(0.55, 0.85, 0.55) if can_factory else Color(0.85, 0.55, 0.55)
+	)
+
+	_inv_drones_title.text = "Drones (%d)" % _drones_state.size()
+	_inv_order_all_btn.disabled = _drones_state.is_empty()
+	for child in _inv_drones_list.get_children():
+		child.queue_free()
+	for d in _drones_state:
+		var did := int(d.get("id", 0))
+		var kind_label := String(d.get("kind", "?"))
+		var state_label: String = DRONE_STATE_LABEL.get(String(d.get("state", "idle")), "?")
+		var btn := _make_ctx_button("#%d — %s — %s" % [did, kind_label, state_label])
+		btn.custom_minimum_size = Vector2(440, 0)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(_on_drone_row_pressed.bind(did))
+		_inv_drones_list.add_child(btn)
+
+	_inv_factories_title.text = "Usines (%d)" % _factories_state.size()
+	for child in _inv_factories_list.get_children():
+		child.queue_free()
+	for f in _factories_state:
+		var lbl2 := Label.new()
+		lbl2.text = "  • #%d — %s" % [int(f.get("id", 0)), String(f.get("kind", "?"))]
+		lbl2.add_theme_font_size_override("font_size", 12)
+		_inv_factories_list.add_child(lbl2)
+
+func _on_build_pressed(item: String) -> void:
+	if not Net.send_build(item):
+		_inv_status_lbl.text = "Réseau indisponible"
+
+func _on_build_result(payload: Dictionary) -> void:
+	var inv: Dictionary = payload.get("inventory", {}) as Dictionary
+	_apply_inventory(inv)
+	_drones_state = (payload.get("drones", []) as Array).duplicate()
+	_factories_state = (payload.get("factories", []) as Array).duplicate()
+	_refresh_drones_visuals()
+	_refresh_factories_visuals()
+	if _inv_panel_visible:
+		var ok := bool(payload.get("ok", false))
+		var item := String(payload.get("item", "?"))
+		if ok:
+			_inv_status_lbl.add_theme_color_override("font_color", Color(0.6, 0.95, 0.65))
+			_inv_status_lbl.text = "Construit : %s" % item
+		else:
+			_inv_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
+			var reason := String(payload.get("reason", ""))
+			_inv_status_lbl.text = "Échec (%s) : %s" % [item, reason]
+		_refresh_inventory_panel()
+
+func _on_drone_tick(payload: Dictionary) -> void:
+	_drones_state = (payload.get("drones", []) as Array).duplicate()
+	_apply_inventory(payload.get("inventory", {}) as Dictionary)
+	_refresh_drones_visuals()
+	if _inv_panel_visible:
+		_refresh_inventory_panel()
+
+func _on_order_result(payload: Dictionary) -> void:
+	if not _inv_panel_visible:
+		return
+	var ok := bool(payload.get("ok", false))
+	if ok:
+		var n := int(payload.get("affected", 0))
+		_inv_status_lbl.add_theme_color_override("font_color", Color(0.6, 0.95, 0.65))
+		_inv_status_lbl.text = "Ordre transmis (%d drone%s)" % [n, "s" if n > 1 else ""]
+	else:
+		var reason := String(payload.get("reason", ""))
+		_inv_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
+		_inv_status_lbl.text = "Ordre rejeté : %s" % reason
+
+func _on_order_all_pressed() -> void:
+	if not Net.send_order_all_drones("mine_nearest"):
+		_inv_status_lbl.text = "Réseau indisponible"
+
+func _build_drone_submenu() -> void:
+	_drone_submenu_layer = CanvasLayer.new()
+	_drone_submenu_layer.name = "DroneSubmenuLayer"
+	_drone_submenu_layer.layer = 22
+	_drone_submenu_layer.visible = false
+	add_child(_drone_submenu_layer)
+	_drone_submenu_panel = PanelContainer.new()
+	_drone_submenu_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG_SOLID, 6))
+	_drone_submenu_layer.add_child(_drone_submenu_panel)
+	_drone_submenu_vbox = VBoxContainer.new()
+	_drone_submenu_vbox.add_theme_constant_override("separation", 2)
+	_drone_submenu_panel.add_child(_drone_submenu_vbox)
+
+func _open_drone_submenu(drone_id: int, screen_pos: Vector2) -> void:
+	_drone_submenu_drone_id = drone_id
+	for c in _drone_submenu_vbox.get_children():
+		c.queue_free()
+	var b_view := _make_ctx_button("Voir")
+	b_view.pressed.connect(_on_drone_view_pressed.bind(drone_id))
+	_drone_submenu_vbox.add_child(b_view)
+	var b_join := _make_ctx_button("Rejoindre")
+	b_join.pressed.connect(_on_drone_join_pressed.bind(drone_id))
+	_drone_submenu_vbox.add_child(b_join)
+	var b_order := _make_ctx_button("Miner l'astre minable le plus proche")
+	b_order.pressed.connect(_on_drone_order_mine_pressed.bind(drone_id))
+	_drone_submenu_vbox.add_child(b_order)
+	var b_cancel := _make_ctx_button("Annuler ordre")
+	b_cancel.pressed.connect(_on_drone_order_idle_pressed.bind(drone_id))
+	_drone_submenu_vbox.add_child(b_cancel)
+	_drone_submenu_panel.visible = true
+	_drone_submenu_layer.visible = true
+	_drone_submenu_open = true
+	await get_tree().process_frame
+	var sz := _drone_submenu_panel.size
+	var vp := get_viewport().get_visible_rect().size
+	var x := minf(screen_pos.x, vp.x - sz.x - 4.0)
+	var y := minf(screen_pos.y, vp.y - sz.y - 4.0)
+	_drone_submenu_panel.position = Vector2(maxf(x, 4.0), maxf(y, 4.0))
+
+func _close_drone_submenu() -> void:
+	_drone_submenu_open = false
+	_drone_submenu_drone_id = -1
+	if _drone_submenu_layer != null:
+		_drone_submenu_layer.visible = false
+
+func _on_drone_row_pressed(drone_id: int) -> void:
+	var pos := get_viewport().get_mouse_position()
+	_open_drone_submenu(drone_id, pos)
+
+func _on_drone_view_pressed(drone_id: int) -> void:
+	_close_drone_submenu()
+	_open_drone_view(drone_id)
+
+func _on_drone_join_pressed(drone_id: int) -> void:
+	_close_drone_submenu()
+	var node := _find_drone_node(drone_id)
+	if node == null:
+		_inv_status_lbl.text = "Drone introuvable"
+		return
+	_action_kind = "navigate"
+	_action_target_kind = "drone"
+	_action_target_node = node
+	_action_target_idx = -1
+	_action_pending_mine = false
+	_action_stop_distance = 4.0
+	_autopilot_mouse_accum = 0.0
+	if _inv_panel_visible:
+		_toggle_inventory_panel()
+
+func _on_drone_order_mine_pressed(drone_id: int) -> void:
+	_close_drone_submenu()
+	if not Net.send_order_drone(drone_id, "mine_nearest"):
+		_inv_status_lbl.text = "Réseau indisponible"
+
+func _on_drone_order_idle_pressed(drone_id: int) -> void:
+	_close_drone_submenu()
+	if not Net.send_order_drone(drone_id, "idle"):
+		_inv_status_lbl.text = "Réseau indisponible"
+
+func _find_drone_node(drone_id: int) -> Node3D:
+	for i in _drones_state.size():
+		if int((_drones_state[i] as Dictionary).get("id", 0)) == drone_id:
+			if i < _drone_nodes.size():
+				return _drone_nodes[i]
+	return null
+
+func _build_drone_view() -> void:
+	_drone_view_layer = CanvasLayer.new()
+	_drone_view_layer.name = "DroneViewLayer"
+	_drone_view_layer.layer = 24
+	_drone_view_layer.visible = false
+	add_child(_drone_view_layer)
+
+	_drone_view_panel = PanelContainer.new()
+	_drone_view_panel.anchor_left = 1.0
+	_drone_view_panel.anchor_right = 1.0
+	_drone_view_panel.offset_left = -340.0
+	_drone_view_panel.offset_right = -16.0
+	_drone_view_panel.offset_top = 16.0
+	_drone_view_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(12, UI_BG_SOLID, 14))
+	_drone_view_layer.add_child(_drone_view_panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	_drone_view_panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "Drone"
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", UI_TITLE)
+	title.name = "Title"
+	box.add_child(title)
+
+	box.add_child(HSeparator.new())
+
+	var sub_container := SubViewportContainer.new()
+	sub_container.custom_minimum_size = Vector2(300, 200)
+	sub_container.stretch = true
+	box.add_child(sub_container)
+
+	_drone_view_subviewport = SubViewport.new()
+	_drone_view_subviewport.size = Vector2i(300, 200)
+	_drone_view_subviewport.transparent_bg = false
+	_drone_view_subviewport.handle_input_locally = false
+	_drone_view_subviewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	sub_container.add_child(_drone_view_subviewport)
+	_drone_view_subviewport.world_3d = get_world_3d()
+
+	_drone_view_camera = Camera3D.new()
+	_drone_view_camera.fov = 55.0
+	_drone_view_subviewport.add_child(_drone_view_camera)
+
+	_drone_view_info_lbl = Label.new()
+	_drone_view_info_lbl.text = ""
+	_drone_view_info_lbl.add_theme_font_size_override("font_size", 12)
+	_drone_view_info_lbl.add_theme_color_override("font_color", UI_TEXT)
+	box.add_child(_drone_view_info_lbl)
+
+	var close_btn := Button.new()
+	close_btn.text = "Fermer"
+	_style_button(close_btn)
+	close_btn.pressed.connect(_close_drone_view)
+	box.add_child(close_btn)
+
+func _open_drone_view(drone_id: int) -> void:
+	_drone_view_target_id = drone_id
+	_drone_view_open = true
+	_drone_view_layer.visible = true
+	if _drone_view_panel.has_node("VBoxContainer"):
+		pass
+	var title_node := _drone_view_panel.get_child(0).get_node("Title")
+	if title_node is Label:
+		(title_node as Label).text = "Drone #%d" % drone_id
+	_update_drone_view()
+
+func _close_drone_view() -> void:
+	_drone_view_open = false
+	_drone_view_target_id = -1
+	if _drone_view_layer != null:
+		_drone_view_layer.visible = false
+
+func _update_drone_view() -> void:
+	if not _drone_view_open or _drone_view_target_id < 0:
+		return
+	var d: Dictionary = {}
+	for entry in _drones_state:
+		if int((entry as Dictionary).get("id", 0)) == _drone_view_target_id:
+			d = entry
+			break
+	if d.is_empty():
+		return
+	var node := _find_drone_node(_drone_view_target_id)
+	if node != null and _drone_view_camera != null:
+		var cam_pos := node.global_position + Vector3(0.0, 1.6, 5.5)
+		_drone_view_camera.global_transform = Transform3D(Basis.IDENTITY, cam_pos).looking_at(node.global_position, Vector3.UP)
+	if _drone_view_info_lbl != null:
+		var state := String(d.get("state", "idle"))
+		var label_state: String = DRONE_STATE_LABEL.get(state, state)
+		var pos_arr: Array = d.get("position", [0.0, 0.0, 0.0]) as Array
+		var ast := int(d.get("target_asteroid", 0)) if d.get("target_asteroid", null) != null else 0
+		var ast_text := ("astéroïde #%d" % ast) if ast > 0 else "—"
+		_drone_view_info_lbl.text = "État : %s\nCible : %s\nPosition : (%.1f, %.1f, %.1f)" % [
+			label_state, ast_text,
+			float(pos_arr[0]), float(pos_arr[1]), float(pos_arr[2]),
+		]
+
+func _make_drone_mesh() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Drone"
+	root.scale = Vector3.ONE * DRONE_VISUAL_SCALE
+
+	var body_mat := StandardMaterial3D.new()
+	body_mat.albedo_color = Color(0.55, 0.62, 0.72)
+	body_mat.metallic = 0.7
+	body_mat.roughness = 0.3
+
+	var thruster_mat := StandardMaterial3D.new()
+	thruster_mat.albedo_color = Color(0.9, 0.4, 0.15)
+	thruster_mat.emission_enabled = true
+	thruster_mat.emission = Color(1.0, 0.45, 0.15)
+	thruster_mat.emission_energy_multiplier = 1.6
+
+	var arm_mat := StandardMaterial3D.new()
+	arm_mat.albedo_color = Color(0.35, 0.40, 0.48)
+	arm_mat.metallic = 0.5
+	arm_mat.roughness = 0.4
+
+	var body := MeshInstance3D.new()
+	var body_mesh := SphereMesh.new()
+	body_mesh.radius = 0.32
+	body_mesh.height = 0.45
+	body.mesh = body_mesh
+	body.material_override = body_mat
+	root.add_child(body)
+
+	var arm_dirs := [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]
+	for d in arm_dirs:
+		var arm := MeshInstance3D.new()
+		var arm_mesh := BoxMesh.new()
+		arm_mesh.size = Vector3(0.7, 0.06, 0.06)
+		arm.mesh = arm_mesh
+		arm.material_override = arm_mat
+		var basis := Basis.IDENTITY
+		if d.z != 0.0:
+			basis = Basis(Vector3.UP, PI * 0.5)
+		arm.transform = Transform3D(basis, d * 0.45)
+		root.add_child(arm)
+
+		var thruster := MeshInstance3D.new()
+		var th_mesh := SphereMesh.new()
+		th_mesh.radius = 0.10
+		th_mesh.height = 0.18
+		thruster.mesh = th_mesh
+		thruster.material_override = thruster_mat
+		thruster.position = d * 0.85
+		root.add_child(thruster)
+
+	return root
+
+func _make_factory_mesh() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Factory"
+
+	var body_mat := StandardMaterial3D.new()
+	body_mat.albedo_color = Color(0.45, 0.48, 0.55)
+	body_mat.metallic = 0.4
+	body_mat.roughness = 0.7
+
+	var hangar_mat := StandardMaterial3D.new()
+	hangar_mat.albedo_color = Color(0.30, 0.35, 0.42)
+	hangar_mat.metallic = 0.5
+	hangar_mat.roughness = 0.6
+
+	var glow_mat := StandardMaterial3D.new()
+	glow_mat.albedo_color = Color(0.20, 0.55, 0.95)
+	glow_mat.emission_enabled = true
+	glow_mat.emission = Color(0.30, 0.65, 1.0)
+	glow_mat.emission_energy_multiplier = 1.4
+
+	var base := MeshInstance3D.new()
+	var base_mesh := BoxMesh.new()
+	base_mesh.size = Vector3(8.0, 2.0, 8.0)
+	base.mesh = base_mesh
+	base.material_override = body_mat
+	base.position = Vector3(0, 1.0, 0)
+	root.add_child(base)
+
+	var tower := MeshInstance3D.new()
+	var tower_mesh := CylinderMesh.new()
+	tower_mesh.top_radius = 1.6
+	tower_mesh.bottom_radius = 2.0
+	tower_mesh.height = 4.0
+	tower.mesh = tower_mesh
+	tower.material_override = body_mat
+	tower.position = Vector3(0, 4.0, 0)
+	root.add_child(tower)
+
+	var hangar := MeshInstance3D.new()
+	var hangar_mesh := BoxMesh.new()
+	hangar_mesh.size = Vector3(4.0, 3.0, 6.0)
+	hangar.mesh = hangar_mesh
+	hangar.material_override = hangar_mat
+	hangar.position = Vector3(5.0, 2.5, 0)
+	root.add_child(hangar)
+
+	var antenna := MeshInstance3D.new()
+	var ant_mesh := CylinderMesh.new()
+	ant_mesh.top_radius = 0.08
+	ant_mesh.bottom_radius = 0.12
+	ant_mesh.height = 3.0
+	antenna.mesh = ant_mesh
+	antenna.material_override = body_mat
+	antenna.position = Vector3(0, 7.5, 0)
+	root.add_child(antenna)
+
+	var glow := MeshInstance3D.new()
+	var glow_mesh := BoxMesh.new()
+	glow_mesh.size = Vector3(0.6, 1.8, 5.6)
+	glow.mesh = glow_mesh
+	glow.material_override = glow_mat
+	glow.position = Vector3(7.05, 2.4, 0)
+	root.add_child(glow)
+
+	return root
+
+func _refresh_drones_visuals() -> void:
+	while _drone_nodes.size() > _drones_state.size():
+		var node: Node3D = _drone_nodes.pop_back()
+		if is_instance_valid(node):
+			node.queue_free()
+		var beam: MeshInstance3D = _drone_beams.pop_back() if _drone_beams.size() > 0 else null
+		if beam != null and is_instance_valid(beam):
+			beam.queue_free()
+	while _drone_nodes.size() < _drones_state.size():
+		var n := _make_drone_mesh()
+		add_child(n)
+		_drone_nodes.append(n)
+		var beam := _make_drone_beam()
+		add_child(beam)
+		_drone_beams.append(beam)
+	_position_drones()
+
+func _position_drones() -> void:
+	var count: int = _drone_nodes.size()
+	if count == 0:
+		return
+	var ship_pos := _ship.global_position
+	var t: float = float(Net.server_now_ms() - _epoch_ms) / 1000.0
+	for i in count:
+		var node: Node3D = _drone_nodes[i]
+		if not is_instance_valid(node):
+			continue
+		var d: Dictionary = _drones_state[i] if i < _drones_state.size() else {}
+		var state := String(d.get("state", "idle"))
+		var beam: MeshInstance3D = _drone_beams[i] if i < _drone_beams.size() else null
+		if state == "idle":
+			var angle: float = (TAU * float(i) / float(count)) + _drones_anim_phase
+			node.global_position = ship_pos + Vector3(
+				cos(angle) * DRONE_FORMATION_RADIUS,
+				DRONE_FORMATION_HEIGHT,
+				sin(angle) * DRONE_FORMATION_RADIUS,
+			)
+			node.rotation.y = -angle + PI * 0.5
+			if beam != null:
+				beam.visible = false
+		else:
+			var pos_arr: Array = d.get("position", [0.0, 0.0, 0.0]) as Array
+			var target_pos := Vector3(float(pos_arr[0]), float(pos_arr[1]), float(pos_arr[2]))
+			node.global_position = node.global_position.lerp(target_pos, 0.30)
+			var look_pos: Vector3
+			if state == "mining" or state == "to_target":
+				look_pos = _drone_target_world_pos(d, t, ship_pos)
+			else:
+				look_pos = ship_pos
+			var to_look := look_pos - node.global_position
+			if to_look.length_squared() > 0.001:
+				node.look_at(look_pos, Vector3.UP)
+			if beam != null:
+				if state == "mining":
+					var ast_pos := _drone_target_world_pos(d, t, node.global_position)
+					_show_drone_beam(beam, node.global_position, ast_pos)
+				else:
+					beam.visible = false
+
+func _drone_target_world_pos(d: Dictionary, t: float, fallback: Vector3) -> Vector3:
+	var ast_id: int = int(d.get("target_asteroid", 0))
+	if ast_id <= 0:
+		return fallback
+	if _belt_id_to_idx.has(ast_id):
+		var idx: int = int(_belt_id_to_idx[ast_id])
+		if idx >= 0 and idx < _belt_alive.size() and _belt_alive[idx] == 1:
+			return _world_pos_of_asteroid(idx, t)
+	return fallback
+
+func _make_drone_beam() -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.08
+	cyl.bottom_radius = 0.16
+	cyl.height = 1.0
+	cyl.radial_segments = 10
+	mi.mesh = cyl
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.45, 0.85, 1.0, 0.80)
+	mat.emission_enabled = true
+	mat.emission = Color(0.55, 0.90, 1.0)
+	mat.emission_energy_multiplier = 3.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visible = false
+	return mi
+
+func _show_drone_beam(beam: MeshInstance3D, from: Vector3, to: Vector3) -> void:
+	var delta_v := to - from
+	var distance := delta_v.length()
+	if distance < 0.05:
+		beam.visible = false
+		return
+	var dir_n := delta_v / distance
+	var up_ref: Vector3 = Vector3.RIGHT if absf(dir_n.y) > 0.99 else Vector3.UP
+	var x_axis := up_ref.cross(dir_n).normalized()
+	var z_axis := dir_n.cross(x_axis).normalized()
+	var t := float(Time.get_ticks_msec()) / 1000.0
+	var pulse: float = 0.85 + 0.30 * sin(t * 8.0)
+	var basis := Basis(x_axis * pulse, dir_n * distance, z_axis * pulse)
+	beam.global_transform = Transform3D(basis, from + delta_v * 0.5)
+	var mat: StandardMaterial3D = beam.material_override
+	mat.emission_energy_multiplier = 3.0 * pulse
+	beam.visible = true
+
+func _refresh_factories_visuals() -> void:
+	while _factory_nodes.size() > _factories_state.size():
+		var node: Node3D = _factory_nodes.pop_back()
+		if is_instance_valid(node):
+			node.queue_free()
+	while _factory_nodes.size() < _factories_state.size():
+		var idx: int = _factory_nodes.size()
+		var f: Dictionary = _factories_state[idx] as Dictionary
+		var pos_arr: Array = f.get("position", [0.0, 0.0, 0.0]) as Array
+		var pos := Vector3(float(pos_arr[0]), float(pos_arr[1]), float(pos_arr[2]))
+		var n := _make_factory_mesh()
+		add_child(n)
+		n.global_position = pos
+		_factory_nodes.append(n)
+
 func _build_inputs_hud() -> void:
 	var layer := CanvasLayer.new()
 	layer.name = "InputsHud"
@@ -1020,47 +1990,66 @@ func _build_inventory_hud() -> void:
 	layer.layer = 5
 	add_child(layer)
 
+	var panel := PanelContainer.new()
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.offset_left = -210.0
+	panel.offset_right = -16.0
+	panel.offset_top = 16.0
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12))
+	layer.add_child(panel)
+
 	var box := VBoxContainer.new()
-	box.anchor_left = 1.0
-	box.anchor_right = 1.0
-	box.offset_left = -200.0
-	box.offset_right = -16.0
-	box.offset_top = 16.0
 	box.add_theme_constant_override("separation", 4)
-	layer.add_child(box)
+	panel.add_child(box)
 
 	var title := Label.new()
 	title.text = "Inventaire"
 	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_color_override("font_color", UI_TITLE)
 	box.add_child(title)
 
 	for kind in INV_KINDS:
 		var l := Label.new()
 		l.text = "%s : 0" % INV_DISPLAY[kind]
 		l.add_theme_font_size_override("font_size", 14)
+		l.add_theme_color_override("font_color", UI_TEXT)
 		box.add_child(l)
 		_inv_labels[kind] = l
 
 func _apply_inventory(inv: Dictionary) -> void:
 	for kind in INV_KINDS:
 		var amount := int(inv.get(kind, 0))
+		_inv_state[kind] = amount
 		if _inv_labels.has(kind):
 			var label: Label = _inv_labels[kind]
 			label.text = "%s : %d" % [INV_DISPLAY[kind], amount]
+	if _inv_panel_visible:
+		_refresh_inventory_panel()
 
 func _on_mine_tick(payload: Dictionary) -> void:
 	_apply_inventory(payload.get("inventory", {}) as Dictionary)
 	var aid := int(payload.get("asteroid_id", -1))
+	var amount := int(payload.get("gained_amount", 0))
+	var kind := String(payload.get("gained_kind", "iron"))
 	if _belt_id_to_idx.has(aid):
 		var idx := int(_belt_id_to_idx[aid])
 		if _belt_stock.size() > idx:
 			_belt_stock[idx] = int(payload.get("remaining", 0))
+		if _belt_alive[idx] == 1 and amount > 0:
+			var t: float = float(Net.server_now_ms() - _epoch_ms) / 1000.0
+			_spawn_mine_popup(_world_pos_of_asteroid(idx, t), kind, amount)
 
 func _on_asteroid_depleted(payload: Dictionary) -> void:
 	_apply_inventory(payload.get("inventory", {}) as Dictionary)
 	var aid := int(payload.get("asteroid_id", -1))
+	var amount := int(payload.get("gained_amount", 0))
+	var kind := String(payload.get("gained_kind", "iron"))
 	if _belt_id_to_idx.has(aid):
 		var idx := int(_belt_id_to_idx[aid])
+		if _belt_alive[idx] == 1 and amount > 0:
+			var t: float = float(Net.server_now_ms() - _epoch_ms) / 1000.0
+			_spawn_mine_popup(_world_pos_of_asteroid(idx, t), kind, amount)
 		if _belt_stock.size() > idx:
 			_belt_stock[idx] = 0
 		_belt_alive[idx] = 0
