@@ -1,12 +1,14 @@
 extends Node
 
+var _layer: CanvasLayer = null
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 
-	var layer := CanvasLayer.new()
-	layer.name = "SkyLayer"
-	layer.layer = -100
-	add_child(layer)
+	_layer = CanvasLayer.new()
+	_layer.name = "SkyLayer"
+	_layer.layer = -100
+	add_child(_layer)
 
 	var rect := ColorRect.new()
 	rect.name = "Sky"
@@ -20,4 +22,8 @@ func _ready() -> void:
 	mat.shader = shader
 	rect.material = mat
 
-	layer.add_child(rect)
+	_layer.add_child(rect)
+
+func set_active(active: bool) -> void:
+	if _layer != null:
+		_layer.visible = active

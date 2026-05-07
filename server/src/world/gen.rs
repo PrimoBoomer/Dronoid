@@ -7,15 +7,25 @@ pub const ORBIT_K: f32 = 0.3;
 pub const MOON_K: f32 = 0.8;
 pub const BELT_K: f32 = 0.0;
 
-pub const BODY_OMEGA_VERSION: &str = "2";
+pub const BODY_OMEGA_VERSION: &str = "5";
 
 pub const BLACK_HOLE_ID: i64 = 0;
 
+const STAR_VISUAL_SCALE: f32 = 2.2;
+const PLANET_VISUAL_SCALE: f32 = 3.5;
+const MOON_VISUAL_SCALE: f32 = 4.5;
+
 const ASTEROIDS_MIN: usize = 2300;
 const ASTEROIDS_MAX: usize = 2700;
-const BELT_GAP: f32 = 50.0;
-const BELT_WIDTH: f32 = 80.0;
-const BELT_THICKNESS_Y: f32 = 15.0;
+const BELT_GAP: f32 = 220.0;
+const BELT_WIDTH: f32 = 280.0;
+const BELT_THICKNESS_Y: f32 = 25.0;
+
+const INNER_ASTEROIDS_MIN: usize = 600;
+const INNER_ASTEROIDS_MAX: usize = 900;
+const INNER_BELT_GAP: f32 = 60.0;
+const INNER_BELT_WIDTH: f32 = 110.0;
+const INNER_BELT_THICKNESS_Y: f32 = 10.0;
 
 fn star_id(system_id: i64) -> i64 {
     (system_id << 12) | 1
@@ -92,7 +102,7 @@ pub fn gen_solar_system(
         primary: BLACK_HOLE_ID,
         name: format!("Sol-{}", seed % 10000),
         galactic_pos,
-        radius: rng.gen_range(8.0..25.0),
+        radius: rng.gen_range(35.0..80.0),
         color: [
             rng.gen_range(0.85..1.0),
             rng.gen_range(0.7..1.0),
@@ -102,19 +112,32 @@ pub fn gen_solar_system(
         omega: 0.0,
     };
 
-    let n_planets = rng.gen_range(5..=12);
+    let star_visual_r = star.radius * STAR_VISUAL_SCALE;
+    let inner_belt_inner = star_visual_r + INNER_BELT_GAP;
+    let inner_belt_outer = inner_belt_inner + INNER_BELT_WIDTH;
+
+    let n_planets = rng.gen_range(9..=16);
     let mut planets = Vec::with_capacity(n_planets);
-    let mut orbit: f32 = star.radius * 4.0;
+    let mut orbit: f32 = inner_belt_outer + rng.gen_range(40.0..120.0);
+    let mut last_visual_r: f32 = 0.0;
     for i in 0..n_planets {
-        orbit += rng.gen_range(5.0..25.0);
-        let p_radius: f32 = rng.gen_range(0.4..4.0);
+        let p_radius: f32 = rng.gen_range(0.3..5.0);
+        let p_visual_r = p_radius * PLANET_VISUAL_SCALE;
+        let padding: f32 = rng.gen_range(45.0..160.0);
+        orbit += last_visual_r + p_visual_r + padding;
+        last_visual_r = p_visual_r;
+
         let p_id = planet_id(system_id, i);
-        let n_moons = rng.gen_range(0..=3);
+        let n_moons = rng.gen_range(0..=4);
         let mut moons = Vec::with_capacity(n_moons);
-        let mut m_orbit: f32 = p_radius * 1.8;
+        let mut m_orbit: f32 = p_visual_r * 1.4;
+        let mut last_m_visual_r: f32 = 0.0;
         for j in 0..n_moons {
-            m_orbit += rng.gen_range(0.4..1.5);
-            let m_radius: f32 = rng.gen_range(0.05..(p_radius * 0.4).max(0.06));
+            let m_radius: f32 = rng.gen_range(0.06..(p_radius * 0.45).max(0.10));
+            let m_visual_r = m_radius * MOON_VISUAL_SCALE;
+            let m_padding: f32 = rng.gen_range(1.0..6.0);
+            m_orbit += last_m_visual_r + m_visual_r + m_padding;
+            last_m_visual_r = m_visual_r;
             let g: f32 = rng.gen_range(0.55..0.95);
             moons.push(Moon {
                 id: moon_id(system_id, i, j),
@@ -148,12 +171,31 @@ pub fn gen_solar_system(
         });
     }
 
-    let belt_inner = orbit + BELT_GAP;
-    let belt_outer = belt_inner + BELT_WIDTH;
-    let n_asteroids = rng.gen_range(ASTEROIDS_MIN..=ASTEROIDS_MAX);
-    let mut asteroid_seeds = Vec::with_capacity(n_asteroids);
-    for _ in 0..n_asteroids {
-        let r = rng.gen_range(belt_inner..belt_outer);
+    let outer_belt_inner = orbit + last_visual_r + BELT_GAP;
+    let outer_belt_outer = outer_belt_inner + BELT_WIDTH;
+    let n_inner = rng.gen_range(INNER_ASTEROIDS_MIN..=INNER_ASTEROIDS_MAX);
+    let n_outer = rng.gen_range(ASTEROIDS_MIN..=ASTEROIDS_MAX);
+    let mut asteroid_seeds = Vec::with_capacity(n_inner + n_outer);
+
+    for _ in 0..n_inner {
+        let r = rng.gen_range(inner_belt_inner..inner_belt_outer);
+        let kind = pick_asteroid_kind(&mut rng);
+        let radius: f32 = rng.gen_range(0.05..1.0);
+        asteroid_seeds.push(AsteroidSeed {
+            primary: s_id,
+            orbit_radius: r,
+            orbit_y: rng.gen_range(-INNER_BELT_THICKNESS_Y..INNER_BELT_THICKNESS_Y),
+            phase: rng.gen_range(0.0..std::f32::consts::TAU),
+            omega: BELT_K / r.max(0.1).sqrt(),
+            radius,
+            color: jitter_color(&mut rng, base_color(kind), 0.10),
+            kind,
+            stock: stock_for_radius(radius),
+        });
+    }
+
+    for _ in 0..n_outer {
+        let r = rng.gen_range(outer_belt_inner..outer_belt_outer);
         let kind = pick_asteroid_kind(&mut rng);
         let radius: f32 = rng.gen_range(0.05..1.0);
         asteroid_seeds.push(AsteroidSeed {

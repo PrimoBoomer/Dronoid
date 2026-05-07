@@ -4,8 +4,8 @@
 [ext_resource type="Mesh" path="res://assets/ship.obj" id="2_ship"]
 
 [sub_resource type="Environment" id="Env_space"]
-background_mode = 3
-background_canvas_max_layer = -1
+background_mode = 1
+background_color = Color(0, 0, 0, 1)
 ambient_light_source = 2
 ambient_light_color = Color(0.35, 0.42, 0.6, 1)
 ambient_light_energy = 0.45

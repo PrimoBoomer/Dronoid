@@ -115,6 +115,7 @@ const ASTEROID_KIND_LABEL := {
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	SkyBackground.set_active(false)
 	_capture_mouse(true)
 	var spawn: Dictionary = Net.current_spawn
 	var sys: Dictionary = spawn.get("system", {}) as Dictionary
