@@ -153,8 +153,8 @@ pub struct Drone {
     pub target_asteroid: Option<i64>,
 }
 
-pub const DRONE_SPEED: f32 = 12.0;
-pub const DRONE_ACCEL: f32 = 4.0;
+pub const DRONE_SPEED: f32 = 9.0;
+pub const DRONE_ACCEL: f32 = 2.5;
 pub const DRONE_MINE_RANGE: f32 = 8.0;
 pub const DRONE_MINE_INTERVAL_MS: i64 = 200;
 pub const DRONE_MINE_AMOUNT: i32 = 2;

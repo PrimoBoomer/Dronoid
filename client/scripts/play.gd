@@ -155,7 +155,6 @@ var _factories_state: Array = []
 var _inv_panel_layer: CanvasLayer = null
 var _inv_panel_root: Control = null
 var _inv_panel_visible: bool = false
-var _inv_res_labels: Dictionary = {}
 var _inv_drone_btn: Button = null
 var _inv_factory_btn: Button = null
 var _inv_drone_cost_lbl: Label = null
@@ -1310,7 +1309,7 @@ func _build_inventory_panel() -> void:
 	var dim := ColorRect.new()
 	dim.anchor_right = 1.0
 	dim.anchor_bottom = 1.0
-	dim.color = Color(0.02, 0.04, 0.10, 0.65)
+	dim.color = Color(0.02, 0.04, 0.10, 0.55)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	_inv_panel_layer.add_child(dim)
 
@@ -1320,161 +1319,133 @@ func _build_inventory_panel() -> void:
 	dim.add_child(center)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(560, 0)
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(14, UI_BG_SOLID, 22))
+	panel.custom_minimum_size = Vector2(360, 0)
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG_SOLID, 12))
 	center.add_child(panel)
 	_inv_panel_root = panel
 
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 10)
+	box.add_theme_constant_override("separation", 6)
 	panel.add_child(box)
 
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	box.add_child(header)
 	var title := Label.new()
-	title.text = "Inventaire"
-	title.add_theme_font_size_override("font_size", 30)
+	title.text = "Drones & construction"
+	title.add_theme_font_size_override("font_size", 16)
 	title.add_theme_color_override("font_color", UI_TITLE)
-	box.add_child(title)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	var hint := Label.new()
+	hint.text = "E pour fermer"
+	hint.add_theme_font_size_override("font_size", 10)
+	hint.add_theme_color_override("font_color", UI_SUBTLE)
+	header.add_child(hint)
 
-	box.add_child(HSeparator.new())
-
-	var res_title := Label.new()
-	res_title.text = "Ressources"
-	res_title.add_theme_font_size_override("font_size", 16)
-	res_title.add_theme_color_override("font_color", UI_SUBTLE)
-	box.add_child(res_title)
-
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 24)
-	grid.add_theme_constant_override("v_separation", 4)
-	box.add_child(grid)
-	for kind in INV_KINDS:
-		var name_lbl := Label.new()
-		name_lbl.text = String(ASTEROID_KIND_LABEL.get(kind, kind))
-		name_lbl.add_theme_color_override("font_color", UI_TEXT)
-		grid.add_child(name_lbl)
-		var amount_lbl := Label.new()
-		amount_lbl.text = "0"
-		amount_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		amount_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		amount_lbl.add_theme_color_override("font_color", UI_TITLE)
-		grid.add_child(amount_lbl)
-		_inv_res_labels[kind] = amount_lbl
-
-	box.add_child(HSeparator.new())
-
-	var build_title := Label.new()
-	build_title.text = "Construction"
-	build_title.add_theme_font_size_override("font_size", 16)
-	build_title.add_theme_color_override("font_color", UI_SUBTLE)
-	box.add_child(build_title)
-
+	# Construction drone : bouton court + coût en sous-texte.
+	var drone_box := VBoxContainer.new()
+	drone_box.add_theme_constant_override("separation", 1)
+	box.add_child(drone_box)
 	_inv_drone_btn = Button.new()
-	_inv_drone_btn.text = "Construire un drone de minage"
+	_inv_drone_btn.text = "Construire un drone"
 	_style_button(_inv_drone_btn)
+	_inv_drone_btn.add_theme_font_size_override("font_size", 12)
 	_inv_drone_btn.pressed.connect(_on_build_pressed.bind("drone"))
-	box.add_child(_inv_drone_btn)
+	drone_box.add_child(_inv_drone_btn)
 	_inv_drone_cost_lbl = Label.new()
 	_inv_drone_cost_lbl.text = _format_cost_line(DRONE_COST)
-	_inv_drone_cost_lbl.add_theme_font_size_override("font_size", 12)
-	box.add_child(_inv_drone_cost_lbl)
+	_inv_drone_cost_lbl.add_theme_font_size_override("font_size", 10)
+	drone_box.add_child(_inv_drone_cost_lbl)
 
-	box.add_child(HSeparator.new())
-
+	# Section drones + stratégies (compactée)
 	_inv_drones_title = Label.new()
 	_inv_drones_title.text = "Drones (0)"
-	_inv_drones_title.add_theme_font_size_override("font_size", 16)
+	_inv_drones_title.add_theme_font_size_override("font_size", 12)
 	_inv_drones_title.add_theme_color_override("font_color", UI_SUBTLE)
 	box.add_child(_inv_drones_title)
 
-	var strat_label := Label.new()
-	strat_label.text = "Stratégie de minage collectif"
-	strat_label.add_theme_font_size_override("font_size", 12)
-	strat_label.add_theme_color_override("font_color", UI_SUBTLE)
-	box.add_child(strat_label)
-
+	# Ordres globaux : 2 boutons larges côte à côte + 4 boutons kind + cancel
+	var strat_row1 := HBoxContainer.new()
+	strat_row1.add_theme_constant_override("separation", 4)
+	box.add_child(strat_row1)
 	_inv_order_all_btn = Button.new()
-	_inv_order_all_btn.text = "Distincts (proches)"
+	_inv_order_all_btn.text = "Distincts"
 	_style_button(_inv_order_all_btn)
+	_inv_order_all_btn.add_theme_font_size_override("font_size", 11)
+	_inv_order_all_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inv_order_all_btn.pressed.connect(_on_order_all_pressed.bind("mine_distinct", ""))
-	box.add_child(_inv_order_all_btn)
-
+	strat_row1.add_child(_inv_order_all_btn)
 	var spread_btn := Button.new()
 	spread_btn.text = "Répartir par type"
 	_style_button(spread_btn)
+	spread_btn.add_theme_font_size_override("font_size", 11)
+	spread_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spread_btn.pressed.connect(_on_order_all_pressed.bind("spread_kinds", ""))
-	box.add_child(spread_btn)
+	strat_row1.add_child(spread_btn)
 
-	var same_label := Label.new()
-	same_label.text = "Tout sur :"
-	same_label.add_theme_font_size_override("font_size", 11)
-	same_label.add_theme_color_override("font_color", UI_SUBTLE)
-	box.add_child(same_label)
-
-	var same_row := HBoxContainer.new()
-	same_row.add_theme_constant_override("separation", 4)
-	box.add_child(same_row)
+	var strat_row2 := HBoxContainer.new()
+	strat_row2.add_theme_constant_override("separation", 3)
+	box.add_child(strat_row2)
 	for kind in INV_KINDS:
 		var k_btn := Button.new()
 		k_btn.text = String(INV_DISPLAY.get(kind, kind))
 		_style_button(k_btn)
-		k_btn.add_theme_font_size_override("font_size", 12)
+		k_btn.add_theme_font_size_override("font_size", 11)
 		k_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		k_btn.pressed.connect(_on_order_all_pressed.bind("mine_kind", kind))
-		same_row.add_child(k_btn)
-
+		strat_row2.add_child(k_btn)
 	var cancel_btn := Button.new()
-	cancel_btn.text = "Annuler tous"
+	cancel_btn.text = "✕"
 	_style_button(cancel_btn)
-	cancel_btn.add_theme_font_size_override("font_size", 12)
+	cancel_btn.add_theme_font_size_override("font_size", 11)
+	cancel_btn.tooltip_text = "Annuler tous les ordres"
 	cancel_btn.pressed.connect(_on_order_all_pressed.bind("idle", ""))
-	box.add_child(cancel_btn)
+	strat_row2.add_child(cancel_btn)
 
+	# Liste de drones scrollable
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 180)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(scroll)
 	_inv_drones_list = VBoxContainer.new()
-	_inv_drones_list.add_theme_constant_override("separation", 2)
-	box.add_child(_inv_drones_list)
+	_inv_drones_list.add_theme_constant_override("separation", 1)
+	_inv_drones_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_inv_drones_list)
 
+	# Section avancée (usines) repliée en bas
 	box.add_child(HSeparator.new())
-
-	var factory_title := Label.new()
-	factory_title.text = "Avancé"
-	factory_title.add_theme_font_size_override("font_size", 12)
-	factory_title.add_theme_color_override("font_color", Color(0.45, 0.55, 0.70))
-	box.add_child(factory_title)
-
+	var factory_row := HBoxContainer.new()
+	factory_row.add_theme_constant_override("separation", 6)
+	box.add_child(factory_row)
 	_inv_factory_btn = Button.new()
-	_inv_factory_btn.text = "Construire une usine à drones"
+	_inv_factory_btn.text = "Construire usine"
 	_style_button(_inv_factory_btn)
-	_inv_factory_btn.add_theme_font_size_override("font_size", 12)
+	_inv_factory_btn.add_theme_font_size_override("font_size", 11)
+	_inv_factory_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inv_factory_btn.pressed.connect(_on_build_pressed.bind("factory"))
-	box.add_child(_inv_factory_btn)
+	factory_row.add_child(_inv_factory_btn)
+	_inv_factories_title = Label.new()
+	_inv_factories_title.text = "0"
+	_inv_factories_title.add_theme_font_size_override("font_size", 11)
+	_inv_factories_title.add_theme_color_override("font_color", Color(0.50, 0.58, 0.70))
+	factory_row.add_child(_inv_factories_title)
 	_inv_factory_cost_lbl = Label.new()
 	_inv_factory_cost_lbl.text = _format_cost_line(FACTORY_COST)
-	_inv_factory_cost_lbl.add_theme_font_size_override("font_size", 11)
+	_inv_factory_cost_lbl.add_theme_font_size_override("font_size", 9)
 	_inv_factory_cost_lbl.add_theme_color_override("font_color", Color(0.50, 0.58, 0.70))
 	box.add_child(_inv_factory_cost_lbl)
-
-	_inv_factories_title = Label.new()
-	_inv_factories_title.text = "Usines (0)"
-	_inv_factories_title.add_theme_font_size_override("font_size", 12)
-	_inv_factories_title.add_theme_color_override("font_color", Color(0.45, 0.55, 0.70))
-	box.add_child(_inv_factories_title)
 	_inv_factories_list = VBoxContainer.new()
-	_inv_factories_list.add_theme_constant_override("separation", 1)
+	_inv_factories_list.add_theme_constant_override("separation", 0)
+	_inv_factories_list.visible = false
 	box.add_child(_inv_factories_list)
 
 	_inv_status_lbl = Label.new()
 	_inv_status_lbl.text = ""
 	_inv_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_inv_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.5))
+	_inv_status_lbl.add_theme_font_size_override("font_size", 11)
 	box.add_child(_inv_status_lbl)
-
-	var hint := Label.new()
-	hint.text = "E pour fermer"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", UI_SUBTLE)
-	box.add_child(hint)
 
 func _format_cost_line(costs: Dictionary) -> String:
 	var parts: Array = []
@@ -1500,10 +1471,6 @@ func _toggle_inventory_panel() -> void:
 			_capture_mouse(true)
 
 func _refresh_inventory_panel() -> void:
-	for kind in INV_KINDS:
-		if _inv_res_labels.has(kind):
-			(_inv_res_labels[kind] as Label).text = "%d" % int(_inv_state.get(kind, 0))
-
 	var can_drone := _can_afford(DRONE_COST)
 	_inv_drone_btn.disabled = not can_drone
 	_inv_drone_cost_lbl.add_theme_color_override(
@@ -1524,22 +1491,14 @@ func _refresh_inventory_panel() -> void:
 		child.queue_free()
 	for d in _drones_state:
 		var did := int(d.get("id", 0))
-		var kind_label := String(d.get("kind", "?"))
 		var state_label: String = DRONE_STATE_LABEL.get(String(d.get("state", "idle")), "?")
-		var btn := _make_ctx_button("#%d — %s — %s" % [did, kind_label, state_label])
-		btn.custom_minimum_size = Vector2(440, 0)
+		var btn := _make_ctx_button("#%d — %s" % [did, state_label])
+		btn.add_theme_font_size_override("font_size", 11)
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.pressed.connect(_on_drone_row_pressed.bind(did))
 		_inv_drones_list.add_child(btn)
 
-	_inv_factories_title.text = "Usines (%d)" % _factories_state.size()
-	for child in _inv_factories_list.get_children():
-		child.queue_free()
-	for f in _factories_state:
-		var lbl2 := Label.new()
-		lbl2.text = "  • #%d — %s" % [int(f.get("id", 0)), String(f.get("kind", "?"))]
-		lbl2.add_theme_font_size_override("font_size", 12)
-		_inv_factories_list.add_child(lbl2)
+	_inv_factories_title.text = "× %d" % _factories_state.size()
 
 func _on_build_pressed(item: String) -> void:
 	if not Net.send_build(item):
@@ -1567,7 +1526,6 @@ func _on_build_result(payload: Dictionary) -> void:
 func _on_drone_tick(payload: Dictionary) -> void:
 	_drones_state = (payload.get("drones", []) as Array).duplicate()
 	_apply_inventory(payload.get("inventory", {}) as Dictionary)
-	_refresh_drones_visuals()
 	_drone_target_t_ms = Net.server_now_ms()
 	_drone_target_pos.resize(_drones_state.size())
 	_drone_target_vel.resize(_drones_state.size())
@@ -1577,6 +1535,7 @@ func _on_drone_tick(payload: Dictionary) -> void:
 		var v_arr: Array = d.get("velocity", [0.0, 0.0, 0.0]) as Array
 		_drone_target_pos[i] = Vector3(float(p_arr[0]), float(p_arr[1]), float(p_arr[2]))
 		_drone_target_vel[i] = Vector3(float(v_arr[0]), float(v_arr[1]), float(v_arr[2]))
+	_refresh_drones_visuals()
 	if _inv_panel_visible:
 		_refresh_inventory_panel()
 
@@ -2090,8 +2049,13 @@ func _refresh_drones_visuals() -> void:
 		if beam != null and is_instance_valid(beam):
 			beam.queue_free()
 	while _drone_nodes.size() < _drones_state.size():
+		var idx: int = _drone_nodes.size()
 		var n := _make_drone_mesh()
 		add_child(n)
+		var initial_pos: Vector3 = _ship.global_position
+		if idx < _drone_target_pos.size():
+			initial_pos = _drone_target_pos[idx]
+		n.global_position = initial_pos
 		_drone_nodes.append(n)
 		var beam := _make_drone_beam()
 		add_child(beam)
@@ -2132,10 +2096,7 @@ func _position_drones(delta: float) -> void:
 			var target_pos: Vector3 = _drone_target_pos[i] if i < _drone_target_pos.size() else node.global_position
 			var target_vel: Vector3 = _drone_target_vel[i] if i < _drone_target_vel.size() else Vector3.ZERO
 			var extrapolated := target_pos + target_vel * elapsed_s
-			if node.global_position.distance_to(extrapolated) > 30.0:
-				node.global_position = extrapolated
-			else:
-				node.global_position = node.global_position.lerp(extrapolated, k)
+			node.global_position = node.global_position.lerp(extrapolated, k)
 			var look_pos: Vector3
 			if target_vel.length_squared() > 0.5:
 				look_pos = node.global_position + target_vel
