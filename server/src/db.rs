@@ -903,8 +903,15 @@ pub fn order_drone(
     player_id: i64,
     drone_id: i64,
     order: &str,
+    position: Option<[f32; 3]>,
 ) -> Result<OrderOutcome> {
     let tx = conn.transaction()?;
+    if let Some(p) = position {
+        tx.execute(
+            "UPDATE player_state SET x = ?1, y = ?2, z = ?3 WHERE player_id = ?4",
+            params![p[0], p[1], p[2], player_id],
+        )?;
+    }
     let player_system: i64 = tx.query_row(
         "SELECT system_id FROM player_state WHERE player_id = ?1",
         params![player_id],
@@ -993,8 +1000,15 @@ pub fn order_all_drones(
     player_id: i64,
     order: &str,
     kind: Option<&str>,
+    position: Option<[f32; 3]>,
 ) -> Result<OrderOutcome> {
     let tx = conn.transaction()?;
+    if let Some(p) = position {
+        tx.execute(
+            "UPDATE player_state SET x = ?1, y = ?2, z = ?3 WHERE player_id = ?4",
+            params![p[0], p[1], p[2], player_id],
+        )?;
+    }
     let player_system: i64 = tx.query_row(
         "SELECT system_id FROM player_state WHERE player_id = ?1",
         params![player_id],

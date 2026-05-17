@@ -131,11 +131,20 @@ func send_mine(asteroid_id: int) -> bool:
 func send_build(item: String) -> bool:
 	return send_msg({"type": "build", "item": item})
 
-func send_order_drone(drone_id: int, order: String) -> bool:
-	return send_msg({"type": "order_drone", "drone_id": drone_id, "order": order})
+func send_order_drone(drone_id: int, order: String, position: Vector3 = Vector3.ZERO) -> bool:
+	return send_msg({
+		"type": "order_drone",
+		"drone_id": drone_id,
+		"order": order,
+		"position": [position.x, position.y, position.z],
+	})
 
-func send_order_all_drones(order: String, kind: String = "") -> bool:
-	var msg := {"type": "order_all_drones", "order": order}
+func send_order_all_drones(order: String, kind: String = "", position: Vector3 = Vector3.ZERO) -> bool:
+	var msg := {
+		"type": "order_all_drones",
+		"order": order,
+		"position": [position.x, position.y, position.z],
+	}
 	if not kind.is_empty():
 		msg["kind"] = kind
 	return send_msg(msg)

@@ -1,54 +1,70 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://ccq7ysqyx0b6s"]
 
-[ext_resource type="Script" path="res://scripts/connect_ui.gd" id="1_connect"]
+[ext_resource type="Script" uid="uid://bem6coc32kqms" path="res://scripts/connect_ui.gd" id="1_connect"]
 
-[node name="Connect" type="Control"]
+[node name="Connect" type="Control" unique_id=262449393]
+layout_mode = 3
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 script = ExtResource("1_connect")
 
-[node name="Center" type="CenterContainer" parent="."]
+[node name="Center" type="CenterContainer" parent="." unique_id=744756175]
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="Panel" type="PanelContainer" parent="Center"]
+[node name="Panel" type="PanelContainer" parent="Center" unique_id=1946085785]
 custom_minimum_size = Vector2(440, 0)
+layout_mode = 2
 
-[node name="Margin" type="MarginContainer" parent="Center/Panel"]
+[node name="Margin" type="MarginContainer" parent="Center/Panel" unique_id=899739468]
+layout_mode = 2
 theme_override_constants/margin_left = 32
 theme_override_constants/margin_top = 28
 theme_override_constants/margin_right = 32
 theme_override_constants/margin_bottom = 28
 
-[node name="Box" type="VBoxContainer" parent="Center/Panel/Margin"]
+[node name="Box" type="VBoxContainer" parent="Center/Panel/Margin" unique_id=705771369]
+layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="Title" type="Label" parent="Center/Panel/Margin/Box"]
+[node name="Title" type="Label" parent="Center/Panel/Margin/Box" unique_id=1158142396]
+layout_mode = 2
 text = "Dronoid"
 horizontal_alignment = 1
 
-[node name="Subtitle" type="Label" parent="Center/Panel/Margin/Box"]
+[node name="Subtitle" type="Label" parent="Center/Panel/Margin/Box" unique_id=256681847]
+layout_mode = 2
 text = "Connexion au serveur"
 horizontal_alignment = 1
 
-[node name="Sep1" type="HSeparator" parent="Center/Panel/Margin/Box"]
+[node name="Sep1" type="HSeparator" parent="Center/Panel/Margin/Box" unique_id=436201031]
+layout_mode = 2
 
-[node name="UrlLabel" type="Label" parent="Center/Panel/Margin/Box"]
+[node name="UrlLabel" type="Label" parent="Center/Panel/Margin/Box" unique_id=21846225]
+layout_mode = 2
 text = "Serveur"
 
-[node name="UrlEdit" type="LineEdit" parent="Center/Panel/Margin/Box"]
+[node name="UrlEdit" type="LineEdit" parent="Center/Panel/Margin/Box" unique_id=1782030290]
+layout_mode = 2
 text = "ws://127.0.0.1:8080"
 
-[node name="NameLabel" type="Label" parent="Center/Panel/Margin/Box"]
+[node name="NameLabel" type="Label" parent="Center/Panel/Margin/Box" unique_id=162904666]
+layout_mode = 2
 text = "Pseudo"
 
-[node name="NameEdit" type="LineEdit" parent="Center/Panel/Margin/Box"]
+[node name="NameEdit" type="LineEdit" parent="Center/Panel/Margin/Box" unique_id=1694670911]
+layout_mode = 2
 placeholder_text = "pseudo"
 
-[node name="Sep2" type="HSeparator" parent="Center/Panel/Margin/Box"]
+[node name="Sep2" type="HSeparator" parent="Center/Panel/Margin/Box" unique_id=59282266]
+layout_mode = 2
 
-[node name="ConnectBtn" type="Button" parent="Center/Panel/Margin/Box"]
+[node name="ConnectBtn" type="Button" parent="Center/Panel/Margin/Box" unique_id=1752655121]
+layout_mode = 2
 text = "Se connecter"
 
-[node name="StatusLabel" type="Label" parent="Center/Panel/Margin/Box"]
+[node name="StatusLabel" type="Label" parent="Center/Panel/Margin/Box" unique_id=801517510]
+layout_mode = 2
 horizontal_alignment = 1

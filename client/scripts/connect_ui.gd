@@ -276,10 +276,11 @@ func _on_btn_hover_out(btn: Button) -> void:
 
 func _animate_intro() -> void:
 	_panel.modulate.a = 0.0
-	_panel.position += Vector2(0, 12)
+	_panel.pivot_offset = _panel.size * 0.5
+	_panel.scale = Vector2(0.98, 0.98)
 	var tw := _panel.create_tween().set_parallel(true)
 	tw.tween_property(_panel, "modulate:a", 1.0, 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(_panel, "position:y", _panel.position.y - 12.0, 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_panel, "scale", Vector2(1.0, 1.0), 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 func _install_title_pulse() -> void:
 	var tw := _title.create_tween().set_loops()
@@ -321,21 +322,10 @@ func _on_connect_pressed() -> void:
 
 func _on_connected(session_id: String) -> void:
 	_session_id = session_id
-	_set_status("Connecté (session %s)" % session_id, STATUS_OK)
+	_set_status("Connecté", STATUS_OK)
 
-func _on_spawned(spawn: Dictionary) -> void:
-	var system: Dictionary = spawn.get("system", {})
-	var star: Dictionary = system.get("star", {})
-	var planets: Array = system.get("planets", [])
-	var gpos: Array = system.get("galactic_pos", [0, 0, 0])
-	var first_time: bool = bool(spawn.get("first_time", false))
-	_set_status("Connecté (%s) — %s @ (%.1f, %.1f, %.1f) — %d planètes — first_time=%s" % [
-		_session_id,
-		String(star.get("name", "?")),
-		float(gpos[0]), float(gpos[1]), float(gpos[2]),
-		planets.size(),
-		str(first_time),
-	], STATUS_OK)
+func _on_spawned(_spawn: Dictionary) -> void:
+	_set_status("Entrée dans le système…", STATUS_OK)
 	await get_tree().create_timer(0.4).timeout
 	if not is_inside_tree():
 		return

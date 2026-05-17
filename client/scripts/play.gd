@@ -1722,7 +1722,7 @@ func _on_order_result(payload: Dictionary) -> void:
 	_pulse_label(_inv_status_lbl, Color(1.4, 1.4, 1.4, 1.0), 0.45)
 
 func _on_order_all_pressed(order: String, kind: String) -> void:
-	if not Net.send_order_all_drones(order, kind):
+	if not Net.send_order_all_drones(order, kind, _ship.global_position):
 		_inv_status_lbl.text = "Réseau indisponible"
 
 func _build_drone_submenu() -> void:
@@ -1796,12 +1796,12 @@ func _on_drone_join_pressed(drone_id: int) -> void:
 
 func _on_drone_order_mine_pressed(drone_id: int) -> void:
 	_close_drone_submenu()
-	if not Net.send_order_drone(drone_id, "mine_nearest"):
+	if not Net.send_order_drone(drone_id, "mine_nearest", _ship.global_position):
 		_inv_status_lbl.text = "Réseau indisponible"
 
 func _on_drone_order_idle_pressed(drone_id: int) -> void:
 	_close_drone_submenu()
-	if not Net.send_order_drone(drone_id, "idle"):
+	if not Net.send_order_drone(drone_id, "idle", _ship.global_position):
 		_inv_status_lbl.text = "Réseau indisponible"
 
 func _find_drone_node(drone_id: int) -> Node3D:

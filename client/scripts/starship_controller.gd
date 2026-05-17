@@ -14,7 +14,7 @@ var _accum: float = 0.0
 func _physics_process(delta: float) -> void:
 	var input := _sample_input()
 	_accum += delta
-	var period := 1.0 / max(send_hz, 1.0)
+	var period : float = 1.0 / max(send_hz, 1.0)
 	if _accum < period:
 		return
 	_accum = 0.0

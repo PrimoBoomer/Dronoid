@@ -262,12 +262,12 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
                     };
                     ws.send(Message::Text(protocol::encode(&msg))).await?;
                 }
-                Ok(ClientMsg::OrderDrone { drone_id, order }) => {
+                Ok(ClientMsg::OrderDrone { drone_id, order, position }) => {
                     let order_state = state.clone();
                     let order_for_task = order.clone();
                     let order_res = tokio::task::spawn_blocking(move || {
                         let mut conn = order_state.db.lock().expect("db mutex poisoned");
-                        db::order_drone(&mut conn, player_id, drone_id, &order_for_task)
+                        db::order_drone(&mut conn, player_id, drone_id, &order_for_task, position)
                     })
                     .await?;
                     let (msg, follow_up) = match order_res {
@@ -314,7 +314,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
                         ws.send(Message::Text(protocol::encode(&f))).await?;
                     }
                 }
-                Ok(ClientMsg::OrderAllDrones { order, kind }) => {
+                Ok(ClientMsg::OrderAllDrones { order, kind, position }) => {
                     let order_state = state.clone();
                     let order_for_task = order.clone();
                     let kind_for_task = kind.clone();
@@ -325,6 +325,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, state: Arc<AppState>) -
                             player_id,
                             &order_for_task,
                             kind_for_task.as_deref(),
+                            position,
                         )
                     })
                     .await?;

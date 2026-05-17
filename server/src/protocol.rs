@@ -22,11 +22,15 @@ pub enum ClientMsg {
     OrderDrone {
         drone_id: i64,
         order: String,
+        #[serde(default)]
+        position: Option<[f32; 3]>,
     },
     OrderAllDrones {
         order: String,
         #[serde(default)]
         kind: Option<String>,
+        #[serde(default)]
+        position: Option<[f32; 3]>,
     },
     Cheat {
         action: String,
