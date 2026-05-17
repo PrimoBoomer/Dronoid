@@ -186,6 +186,9 @@ var _drone_hud_widgets: Array = []
 
 var _cheat_layer: CanvasLayer = null
 
+var _pause_dim: ColorRect = null
+var _pause_panel: PanelContainer = null
+
 const DRONE_STATE_LABEL := {
 	"idle": "Inactif",
 	"to_target": "En route",
@@ -507,12 +510,12 @@ func _place_ship(spawn: Dictionary, star: Dictionary) -> void:
 	_ship.position = pos
 	_ship.look_at(Vector3.ZERO, Vector3.UP)
 
-func _make_ui_panel_style(corner: int = 10, bg: Color = UI_BG, pad: int = 14) -> StyleBoxFlat:
+func _make_ui_panel_style(corner: int = 10, bg: Color = UI_BG, pad: int = 14, accent_top: bool = false, glow: bool = false) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
 	s.bg_color = bg
 	s.border_width_left = 1
 	s.border_width_right = 1
-	s.border_width_top = 1
+	s.border_width_top = 2 if accent_top else 1
 	s.border_width_bottom = 1
 	s.border_color = UI_BORDER
 	s.corner_radius_top_left = corner
@@ -523,9 +526,14 @@ func _make_ui_panel_style(corner: int = 10, bg: Color = UI_BG, pad: int = 14) ->
 	s.content_margin_right = pad
 	s.content_margin_top = pad
 	s.content_margin_bottom = pad
-	s.shadow_color = Color(0.10, 0.30, 0.65, 0.30)
-	s.shadow_size = 12
-	s.shadow_offset = Vector2(0, 3)
+	if glow:
+		s.shadow_color = Color(0.30, 0.55, 1.00, 0.45)
+		s.shadow_size = 22
+		s.shadow_offset = Vector2(0, 4)
+	else:
+		s.shadow_color = Color(0.10, 0.30, 0.65, 0.30)
+		s.shadow_size = 12
+		s.shadow_offset = Vector2(0, 3)
 	return s
 
 func _style_button(btn: Button) -> void:
@@ -546,6 +554,14 @@ func _style_button(btn: Button) -> void:
 	base.content_margin_bottom = 8
 	var hover := base.duplicate() as StyleBoxFlat
 	hover.bg_color = UI_BTN_HOVER
+	hover.border_color = Color(0.60, 0.82, 1.00, 1.0)
+	hover.expand_margin_left = 1
+	hover.expand_margin_right = 1
+	hover.expand_margin_top = 1
+	hover.expand_margin_bottom = 1
+	hover.shadow_color = Color(0.30, 0.55, 1.00, 0.55)
+	hover.shadow_size = 10
+	hover.shadow_offset = Vector2(0, 0)
 	var pressed := base.duplicate() as StyleBoxFlat
 	pressed.bg_color = UI_BTN_PRESSED
 	var disabled := base.duplicate() as StyleBoxFlat
@@ -560,7 +576,76 @@ func _style_button(btn: Button) -> void:
 	btn.add_theme_color_override("font_hover_color", Color.WHITE)
 	btn.add_theme_color_override("font_pressed_color", UI_TITLE)
 	btn.add_theme_color_override("font_disabled_color", Color(0.55, 0.62, 0.75))
+	btn.add_theme_color_override("font_outline_color", UI_BORDER_SOFT)
+	btn.add_theme_constant_override("outline_size", 0)
 	btn.add_theme_font_size_override("font_size", 14)
+	_attach_button_hover_anim(btn)
+
+func _style_label_title(lbl: Label, size: int = 16, accent: Color = UI_BORDER_SOFT) -> void:
+	lbl.add_theme_font_size_override("font_size", size)
+	lbl.add_theme_color_override("font_color", UI_TITLE)
+	lbl.add_theme_color_override("font_outline_color", accent)
+	lbl.add_theme_constant_override("outline_size", 2)
+
+func _make_gradient_separator(h: int = 1) -> Control:
+	var tex_rect := TextureRect.new()
+	tex_rect.custom_minimum_size = Vector2(0, h)
+	tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	tex_rect.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var grad := Gradient.new()
+	grad.colors = PackedColorArray([
+		Color(0.30, 0.50, 0.85, 0.0),
+		Color(0.55, 0.80, 1.00, 0.90),
+		Color(0.30, 0.50, 0.85, 0.0),
+	])
+	grad.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+	var gtex := GradientTexture1D.new()
+	gtex.gradient = grad
+	gtex.width = 256
+	tex_rect.texture = gtex
+	return tex_rect
+
+func _attach_button_hover_anim(btn: Button) -> void:
+	btn.mouse_entered.connect(_on_btn_hover_in.bind(btn))
+	btn.mouse_exited.connect(_on_btn_hover_out.bind(btn))
+
+func _on_btn_hover_in(btn: Button) -> void:
+	if not is_instance_valid(btn):
+		return
+	btn.pivot_offset = btn.size * 0.5
+	var tw := btn.create_tween()
+	tw.tween_property(btn, "scale", Vector2(1.03, 1.03), 0.10).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+func _on_btn_hover_out(btn: Button) -> void:
+	if not is_instance_valid(btn):
+		return
+	btn.pivot_offset = btn.size * 0.5
+	var tw := btn.create_tween()
+	tw.tween_property(btn, "scale", Vector2(1.0, 1.0), 0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+func _pulse_label(lbl: Label, color: Color = Color(1.6, 1.6, 1.6, 1.0), dur: float = 0.30) -> void:
+	if not is_instance_valid(lbl):
+		return
+	var tw := lbl.create_tween()
+	lbl.modulate = color
+	tw.tween_property(lbl, "modulate", Color.WHITE, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+func _tint_button(btn: Button, tint: Color) -> void:
+	var normal := (btn.get_theme_stylebox("normal") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	var hover := (btn.get_theme_stylebox("hover") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	var pressed := (btn.get_theme_stylebox("pressed") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	var tint_bg := Color(tint.r * 0.45, tint.g * 0.45, tint.b * 0.55, 0.85)
+	var tint_hover := Color(tint.r * 0.65, tint.g * 0.65, tint.b * 0.75, 0.95)
+	var tint_pressed := Color(tint.r * 0.35, tint.g * 0.35, tint.b * 0.50, 1.0)
+	normal.bg_color = tint_bg
+	hover.bg_color = tint_hover
+	pressed.bg_color = tint_pressed
+	normal.border_color = tint.lerp(Color.WHITE, 0.3)
+	hover.border_color = tint.lerp(Color.WHITE, 0.5)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
 
 func _build_pause_menu() -> void:
 	_pause_layer = CanvasLayer.new()
@@ -569,21 +654,22 @@ func _build_pause_menu() -> void:
 	_pause_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_pause_layer)
 
-	var dim := ColorRect.new()
-	dim.color = Color(0.02, 0.04, 0.10, 0.65)
-	dim.anchor_right = 1.0
-	dim.anchor_bottom = 1.0
-	_pause_layer.add_child(dim)
+	_pause_dim = ColorRect.new()
+	_pause_dim.color = Color(0.02, 0.04, 0.10, 0.65)
+	_pause_dim.anchor_right = 1.0
+	_pause_dim.anchor_bottom = 1.0
+	_pause_layer.add_child(_pause_dim)
 
 	var center := CenterContainer.new()
 	center.anchor_right = 1.0
 	center.anchor_bottom = 1.0
 	_pause_layer.add_child(center)
 
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(320, 0)
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(14, UI_BG_SOLID, 22))
-	center.add_child(panel)
+	_pause_panel = PanelContainer.new()
+	_pause_panel.custom_minimum_size = Vector2(320, 0)
+	_pause_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(14, UI_BG_SOLID, 22, true, true))
+	center.add_child(_pause_panel)
+	var panel := _pause_panel
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 14)
@@ -591,13 +677,11 @@ func _build_pause_menu() -> void:
 
 	var title := Label.new()
 	title.text = "Pause"
-	title.add_theme_font_size_override("font_size", 30)
-	title.add_theme_color_override("font_color", UI_TITLE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label_title(title, 30, Color(0.55, 0.85, 1.00, 0.85))
 	box.add_child(title)
 
-	var sep := HSeparator.new()
-	box.add_child(sep)
+	box.add_child(_make_gradient_separator())
 
 	var resume_btn := Button.new()
 	resume_btn.text = "Reprendre"
@@ -635,6 +719,15 @@ func _pause() -> void:
 	get_tree().paused = true
 	_pause_layer.visible = true
 	_capture_mouse(false)
+	if _pause_dim != null and _pause_panel != null:
+		_pause_dim.color.a = 0.0
+		_pause_panel.modulate.a = 0.0
+		_pause_panel.pivot_offset = _pause_panel.size * 0.5
+		_pause_panel.scale = Vector2(0.95, 0.95)
+		var tw := _pause_layer.create_tween().set_parallel(true)
+		tw.tween_property(_pause_dim, "color:a", 0.65, 0.18).set_trans(Tween.TRANS_QUAD)
+		tw.tween_property(_pause_panel, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_QUAD)
+		tw.tween_property(_pause_panel, "scale", Vector2(1.0, 1.0), 0.20).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 func _resume() -> void:
 	_paused = false
@@ -1041,21 +1134,26 @@ func _spawn_mine_popup(world_pos: Vector3, kind: String, amount: int) -> void:
 	var color: Color = KIND_POPUP_COLOR.get(kind, Color.WHITE)
 	label.text = "+%d %s" % [amount, ASTEROID_KIND_LABEL.get(kind, kind)]
 	label.font_size = 36
-	label.outline_size = 8
-	label.outline_modulate = Color(0, 0, 0, 0.9)
+	label.outline_size = 10
+	label.outline_modulate = Color(0, 0, 0, 0.95)
 	label.modulate = color
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
 	label.fixed_size = false
+	label.pixel_size = 0.005
 	add_child(label)
 	label.global_position = world_pos
 	var rise_to: float = world_pos.y + 4.0
 	var lateral := Vector3(randf_range(-0.6, 0.6), 0.0, randf_range(-0.6, 0.6))
 	label.global_position += lateral
+	label.scale = Vector3(0.6, 0.6, 0.6)
 	var tween := create_tween().set_parallel(true)
 	tween.tween_property(label, "global_position:y", rise_to, 1.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tween.tween_property(label, "modulate:a", 0.0, 0.85).set_delay(0.25).set_trans(Tween.TRANS_LINEAR)
-	tween.chain().tween_callback(label.queue_free)
+	tween.tween_property(label, "scale", Vector3(1.15, 1.15, 1.15), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.chain().tween_property(label, "scale", Vector3(1.0, 1.0, 1.0), 0.12).set_trans(Tween.TRANS_QUAD)
+	var tw_fade := create_tween()
+	tw_fade.tween_property(label, "modulate:a", 0.0, 0.85).set_delay(0.30).set_trans(Tween.TRANS_LINEAR)
+	tw_fade.tween_callback(label.queue_free)
 
 func _build_tooltip_ui() -> void:
 	_tooltip_layer = CanvasLayer.new()
@@ -1064,9 +1162,10 @@ func _build_tooltip_ui() -> void:
 
 	_tooltip_panel = PanelContainer.new()
 	_tooltip_panel.visible = false
+	_tooltip_panel.modulate.a = 0.0
 	_tooltip_layer.add_child(_tooltip_panel)
 
-	_tooltip_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(8, UI_BG, 10))
+	_tooltip_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(8, UI_BG, 10, true, false))
 
 	_tooltip_label = Label.new()
 	_tooltip_label.add_theme_color_override("font_color", UI_TITLE)
@@ -1074,13 +1173,22 @@ func _build_tooltip_ui() -> void:
 	_tooltip_panel.add_child(_tooltip_label)
 
 	_tooltip_connector = Line2D.new()
-	_tooltip_connector.width = 1.5
+	_tooltip_connector.width = 1.8
 	_tooltip_connector.default_color = UI_BORDER
 	_tooltip_connector.antialiased = true
 	_tooltip_connector.visible = false
+	var line_grad := Gradient.new()
+	line_grad.colors = PackedColorArray([
+		Color(0.55, 0.80, 1.00, 1.00),
+		Color(0.40, 0.65, 1.00, 0.65),
+		Color(0.30, 0.50, 0.85, 0.10),
+	])
+	line_grad.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+	_tooltip_connector.gradient = line_grad
 	_tooltip_layer.add_child(_tooltip_connector)
 
 func _show_tooltip(text: String) -> void:
+	var was_hidden := not _tooltip_panel.visible
 	_tooltip_label.text = text
 	_tooltip_panel.visible = true
 	var mp := get_viewport().get_mouse_position()
@@ -1091,6 +1199,11 @@ func _show_tooltip(text: String) -> void:
 	if x + sz.x > vp.x: x = mp.x - sz.x - 8.0
 	if y + sz.y > vp.y: y = mp.y - sz.y - 8.0
 	_tooltip_panel.position = Vector2(x, y)
+	if was_hidden:
+		var tw := _tooltip_panel.create_tween()
+		tw.tween_property(_tooltip_panel, "modulate:a", 1.0, 0.12).set_trans(Tween.TRANS_QUAD)
+	else:
+		_tooltip_panel.modulate.a = 1.0
 	_update_connector()
 
 func _update_connector() -> void:
@@ -1139,6 +1252,7 @@ func _update_connector() -> void:
 func _hide_tooltip() -> void:
 	if _tooltip_panel != null:
 		_tooltip_panel.visible = false
+		_tooltip_panel.modulate.a = 0.0
 	if _tooltip_connector != null:
 		_tooltip_connector.visible = false
 	_connector_initialized = false
@@ -1228,6 +1342,7 @@ func _make_ctx_button(label: String) -> Button:
 	btn.add_theme_stylebox_override("hover", sh)
 	btn.add_theme_stylebox_override("pressed", sp)
 	btn.add_theme_stylebox_override("focus", sn)
+	_attach_button_hover_anim(btn)
 	return btn
 
 func _build_context_menu() -> void:
@@ -1265,12 +1380,18 @@ func _open_context_menu(screen_pos: Vector2) -> void:
 		_ctx_vbox.add_child(btn_mine)
 
 	_ctx_panel.visible = true
+	_ctx_panel.modulate.a = 0.0
+	_ctx_panel.scale = Vector2(0.92, 0.92)
 	await get_tree().process_frame
 	var sz := _ctx_panel.size
 	var vp := get_viewport().get_visible_rect().size
 	var x := minf(screen_pos.x, vp.x - sz.x - 4.0)
 	var y := minf(screen_pos.y, vp.y - sz.y - 4.0)
 	_ctx_panel.position = Vector2(maxf(x, 4.0), maxf(y, 4.0))
+	_ctx_panel.pivot_offset = Vector2.ZERO
+	var tw := _ctx_panel.create_tween().set_parallel(true)
+	tw.tween_property(_ctx_panel, "modulate:a", 1.0, 0.12).set_trans(Tween.TRANS_QUAD)
+	tw.tween_property(_ctx_panel, "scale", Vector2(1.0, 1.0), 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 	_ctx_open = true
 
@@ -1307,6 +1428,7 @@ func _build_inventory_panel() -> void:
 	add_child(_inv_panel_layer)
 
 	var dim := ColorRect.new()
+	dim.name = "Dim"
 	dim.anchor_right = 1.0
 	dim.anchor_bottom = 1.0
 	dim.color = Color(0.02, 0.04, 0.10, 0.55)
@@ -1320,7 +1442,7 @@ func _build_inventory_panel() -> void:
 
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(360, 0)
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG_SOLID, 12))
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(12, UI_BG_SOLID, 14, true, true))
 	center.add_child(panel)
 	_inv_panel_root = panel
 
@@ -1333,15 +1455,33 @@ func _build_inventory_panel() -> void:
 	box.add_child(header)
 	var title := Label.new()
 	title.text = "Drones & construction"
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", UI_TITLE)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_label_title(title, 17, UI_BORDER_SOFT)
 	header.add_child(title)
+	var hint_pill := PanelContainer.new()
+	var hint_style := StyleBoxFlat.new()
+	hint_style.bg_color = Color(0.10, 0.16, 0.28, 0.85)
+	hint_style.border_width_left = 1
+	hint_style.border_width_right = 1
+	hint_style.border_width_top = 1
+	hint_style.border_width_bottom = 1
+	hint_style.border_color = UI_BORDER_SOFT
+	hint_style.corner_radius_top_left = 4
+	hint_style.corner_radius_top_right = 4
+	hint_style.corner_radius_bottom_left = 4
+	hint_style.corner_radius_bottom_right = 4
+	hint_style.content_margin_left = 8
+	hint_style.content_margin_right = 8
+	hint_style.content_margin_top = 2
+	hint_style.content_margin_bottom = 2
+	hint_pill.add_theme_stylebox_override("panel", hint_style)
 	var hint := Label.new()
 	hint.text = "E pour fermer"
 	hint.add_theme_font_size_override("font_size", 10)
 	hint.add_theme_color_override("font_color", UI_SUBTLE)
-	header.add_child(hint)
+	hint_pill.add_child(hint)
+	header.add_child(hint_pill)
+	box.add_child(_make_gradient_separator())
 
 	# Construction drone : bouton court + coût en sous-texte.
 	var drone_box := VBoxContainer.new()
@@ -1350,7 +1490,7 @@ func _build_inventory_panel() -> void:
 	_inv_drone_btn = Button.new()
 	_inv_drone_btn.text = "Construire un drone"
 	_style_button(_inv_drone_btn)
-	_inv_drone_btn.add_theme_font_size_override("font_size", 12)
+	_inv_drone_btn.add_theme_font_size_override("font_size", 14)
 	_inv_drone_btn.pressed.connect(_on_build_pressed.bind("drone"))
 	drone_box.add_child(_inv_drone_btn)
 	_inv_drone_cost_lbl = Label.new()
@@ -1391,6 +1531,8 @@ func _build_inventory_panel() -> void:
 		var k_btn := Button.new()
 		k_btn.text = String(INV_DISPLAY.get(kind, kind))
 		_style_button(k_btn)
+		var k_color: Color = KIND_POPUP_COLOR.get(kind, UI_BTN_NORMAL)
+		_tint_button(k_btn, k_color)
 		k_btn.add_theme_font_size_override("font_size", 11)
 		k_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		k_btn.pressed.connect(_on_order_all_pressed.bind("mine_kind", kind))
@@ -1414,7 +1556,7 @@ func _build_inventory_panel() -> void:
 	scroll.add_child(_inv_drones_list)
 
 	# Section avancée (usines) repliée en bas
-	box.add_child(HSeparator.new())
+	box.add_child(_make_gradient_separator())
 	var factory_row := HBoxContainer.new()
 	factory_row.add_theme_constant_override("separation", 6)
 	box.add_child(factory_row)
@@ -1466,6 +1608,18 @@ func _toggle_inventory_panel() -> void:
 		_inv_status_lbl.text = ""
 		_capture_mouse(false)
 		_refresh_inventory_panel()
+		if _inv_panel_root != null:
+			_inv_panel_root.pivot_offset = _inv_panel_root.size * 0.5
+			_inv_panel_root.modulate.a = 0.0
+			_inv_panel_root.scale = Vector2(0.96, 0.96)
+			var dim_node := _inv_panel_layer.get_node_or_null("Dim") as ColorRect
+			if dim_node != null:
+				dim_node.color.a = 0.0
+			var tw := _inv_panel_layer.create_tween().set_parallel(true)
+			tw.tween_property(_inv_panel_root, "modulate:a", 1.0, 0.16).set_trans(Tween.TRANS_QUAD)
+			tw.tween_property(_inv_panel_root, "scale", Vector2(1.0, 1.0), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+			if dim_node != null:
+				tw.tween_property(dim_node, "color:a", 0.55, 0.16).set_trans(Tween.TRANS_QUAD)
 	else:
 		if not _alt_held and not _ctx_open:
 			_capture_mouse(true)
@@ -1489,14 +1643,27 @@ func _refresh_inventory_panel() -> void:
 	_inv_order_all_btn.disabled = _drones_state.is_empty()
 	for child in _inv_drones_list.get_children():
 		child.queue_free()
+	var row_idx := 0
 	for d in _drones_state:
 		var did := int(d.get("id", 0))
 		var state_label: String = DRONE_STATE_LABEL.get(String(d.get("state", "idle")), "?")
+		var row_wrap := PanelContainer.new()
+		row_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if row_idx % 2 == 1:
+			var zebra := StyleBoxFlat.new()
+			zebra.bg_color = Color(0.30, 0.50, 0.85, 0.06)
+			zebra.corner_radius_top_left = 4
+			zebra.corner_radius_top_right = 4
+			zebra.corner_radius_bottom_left = 4
+			zebra.corner_radius_bottom_right = 4
+			row_wrap.add_theme_stylebox_override("panel", zebra)
 		var btn := _make_ctx_button("#%d — %s" % [did, state_label])
 		btn.add_theme_font_size_override("font_size", 11)
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.pressed.connect(_on_drone_row_pressed.bind(did))
-		_inv_drones_list.add_child(btn)
+		row_wrap.add_child(btn)
+		_inv_drones_list.add_child(row_wrap)
+		row_idx += 1
 
 	_inv_factories_title.text = "× %d" % _factories_state.size()
 
@@ -1521,6 +1688,7 @@ func _on_build_result(payload: Dictionary) -> void:
 			_inv_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
 			var reason := String(payload.get("reason", ""))
 			_inv_status_lbl.text = "Échec (%s) : %s" % [item, reason]
+		_pulse_label(_inv_status_lbl, Color(1.4, 1.4, 1.4, 1.0), 0.45)
 		_refresh_inventory_panel()
 
 func _on_drone_tick(payload: Dictionary) -> void:
@@ -1551,6 +1719,7 @@ func _on_order_result(payload: Dictionary) -> void:
 		var reason := String(payload.get("reason", ""))
 		_inv_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
 		_inv_status_lbl.text = "Ordre rejeté : %s" % reason
+	_pulse_label(_inv_status_lbl, Color(1.4, 1.4, 1.4, 1.0), 0.45)
 
 func _on_order_all_pressed(order: String, kind: String) -> void:
 	if not Net.send_order_all_drones(order, kind):
@@ -1655,7 +1824,7 @@ func _build_drone_view() -> void:
 	_drone_view_panel.offset_left = -340.0
 	_drone_view_panel.offset_right = -16.0
 	_drone_view_panel.offset_top = 16.0
-	_drone_view_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(12, UI_BG_SOLID, 14))
+	_drone_view_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(12, UI_BG_SOLID, 14, true, true))
 	_drone_view_layer.add_child(_drone_view_panel)
 
 	var box := VBoxContainer.new()
@@ -1664,17 +1833,22 @@ func _build_drone_view() -> void:
 
 	var title := Label.new()
 	title.text = "Drone"
-	title.add_theme_font_size_override("font_size", 18)
-	title.add_theme_color_override("font_color", UI_TITLE)
 	title.name = "Title"
+	_style_label_title(title, 18, Color(0.55, 0.85, 1.00, 0.85))
 	box.add_child(title)
 
-	box.add_child(HSeparator.new())
+	box.add_child(_make_gradient_separator())
+
+	var feed_wrap := Control.new()
+	feed_wrap.custom_minimum_size = Vector2(300, 200)
+	feed_wrap.clip_contents = true
+	box.add_child(feed_wrap)
 
 	var sub_container := SubViewportContainer.new()
-	sub_container.custom_minimum_size = Vector2(300, 200)
+	sub_container.anchor_right = 1.0
+	sub_container.anchor_bottom = 1.0
 	sub_container.stretch = true
-	box.add_child(sub_container)
+	feed_wrap.add_child(sub_container)
 
 	_drone_view_subviewport = SubViewport.new()
 	_drone_view_subviewport.size = Vector2i(300, 200)
@@ -1687,6 +1861,31 @@ func _build_drone_view() -> void:
 	_drone_view_camera = Camera3D.new()
 	_drone_view_camera.fov = 55.0
 	_drone_view_subviewport.add_child(_drone_view_camera)
+
+	var frame_overlay := Panel.new()
+	frame_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame_overlay.anchor_right = 1.0
+	frame_overlay.anchor_bottom = 1.0
+	var frame_style := StyleBoxFlat.new()
+	frame_style.bg_color = Color(0, 0, 0, 0)
+	frame_style.border_width_left = 2
+	frame_style.border_width_right = 2
+	frame_style.border_width_top = 2
+	frame_style.border_width_bottom = 2
+	frame_style.border_color = UI_BORDER
+	frame_overlay.add_theme_stylebox_override("panel", frame_style)
+	feed_wrap.add_child(frame_overlay)
+
+	var scan := ColorRect.new()
+	scan.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	scan.color = Color(0.55, 0.80, 1.00, 0.35)
+	scan.size = Vector2(300, 2)
+	scan.anchor_right = 1.0
+	scan.offset_bottom = 2.0
+	feed_wrap.add_child(scan)
+	var scan_tw := scan.create_tween().set_loops()
+	scan_tw.tween_property(scan, "position:y", 198.0, 2.0).set_trans(Tween.TRANS_LINEAR)
+	scan_tw.tween_property(scan, "position:y", 0.0, 0.0)
 
 	_drone_view_info_lbl = Label.new()
 	_drone_view_info_lbl.text = ""
@@ -1831,6 +2030,8 @@ func _make_drone_hud_widget() -> Control:
 	tip_lbl.name = "TipLabel"
 	tip_lbl.add_theme_font_size_override("font_size", 11)
 	tip_lbl.add_theme_color_override("font_color", UI_TEXT)
+	tip_lbl.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.10, 0.95))
+	tip_lbl.add_theme_constant_override("outline_size", 2)
 	tip.add_child(tip_lbl)
 	root.add_child(tip)
 
@@ -1839,10 +2040,15 @@ func _make_drone_hud_widget() -> Control:
 	arrow.text = "▶"
 	arrow.add_theme_font_size_override("font_size", 22)
 	arrow.add_theme_color_override("font_color", UI_BORDER)
+	arrow.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.10, 0.95))
+	arrow.add_theme_constant_override("outline_size", 3)
 	arrow.size = Vector2(24, 24)
 	arrow.pivot_offset = Vector2(12, 12)
 	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(arrow)
+	var pulse_tw := arrow.create_tween().set_loops()
+	pulse_tw.tween_property(arrow, "modulate:a", 0.55, 0.7).set_trans(Tween.TRANS_SINE)
+	pulse_tw.tween_property(arrow, "modulate:a", 1.0, 0.7).set_trans(Tween.TRANS_SINE)
 
 	return root
 
@@ -2189,14 +2395,21 @@ func _build_inputs_hud() -> void:
 	panel.anchor_top = 1.0
 	panel.anchor_bottom = 1.0
 	panel.offset_left = 16.0
-	panel.offset_top = -190.0
+	panel.offset_top = -210.0
 	panel.offset_bottom = -16.0
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12))
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12, true, false))
 	layer.add_child(panel)
 
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 2)
+	box.add_theme_constant_override("separation", 4)
 	panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "COMMANDES"
+	title.add_theme_font_size_override("font_size", 10)
+	title.add_theme_color_override("font_color", UI_SUBTLE)
+	box.add_child(title)
+	box.add_child(_make_gradient_separator())
 
 	var lines := [
 		"Souris : orienter",
@@ -2206,12 +2419,49 @@ func _build_inputs_hud() -> void:
 		"E : inventaire",
 		"ESC : menu pause",
 	]
-	for line in lines:
-		var l := Label.new()
-		l.text = line
-		l.add_theme_font_size_override("font_size", 12)
-		l.add_theme_color_override("font_color", UI_TEXT)
-		box.add_child(l)
+	for line_v in lines:
+		var line: String = String(line_v)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		box.add_child(row)
+		var sep_idx: int = line.find(" : ")
+		var key_text: String = line.substr(0, sep_idx) if sep_idx >= 0 else line
+		var act_text: String = line.substr(sep_idx + 3) if sep_idx >= 0 else ""
+
+		var key_pill := PanelContainer.new()
+		var pill_style := StyleBoxFlat.new()
+		pill_style.bg_color = Color(0.10, 0.16, 0.28, 0.85)
+		pill_style.border_width_left = 1
+		pill_style.border_width_right = 1
+		pill_style.border_width_top = 1
+		pill_style.border_width_bottom = 1
+		pill_style.border_color = UI_BORDER_SOFT
+		pill_style.corner_radius_top_left = 4
+		pill_style.corner_radius_top_right = 4
+		pill_style.corner_radius_bottom_left = 4
+		pill_style.corner_radius_bottom_right = 4
+		pill_style.content_margin_left = 6
+		pill_style.content_margin_right = 6
+		pill_style.content_margin_top = 1
+		pill_style.content_margin_bottom = 1
+		key_pill.add_theme_stylebox_override("panel", pill_style)
+		var key_lbl := Label.new()
+		key_lbl.text = key_text
+		key_lbl.add_theme_font_size_override("font_size", 11)
+		key_lbl.add_theme_color_override("font_color", UI_TITLE)
+		key_pill.add_child(key_lbl)
+		row.add_child(key_pill)
+
+		var act_lbl := Label.new()
+		act_lbl.text = act_text
+		act_lbl.add_theme_font_size_override("font_size", 12)
+		act_lbl.add_theme_color_override("font_color", UI_SUBTLE)
+		act_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(act_lbl)
+
+	panel.modulate.a = 0.0
+	var tw := panel.create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, 0.4).set_delay(0.2).set_trans(Tween.TRANS_QUAD)
 
 func _build_inventory_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -2222,37 +2472,52 @@ func _build_inventory_hud() -> void:
 	var panel := PanelContainer.new()
 	panel.anchor_left = 1.0
 	panel.anchor_right = 1.0
-	panel.offset_left = -210.0
+	panel.offset_left = -220.0
 	panel.offset_right = -16.0
 	panel.offset_top = 16.0
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12))
+	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12, true, false))
 	layer.add_child(panel)
 
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 4)
+	box.add_theme_constant_override("separation", 5)
 	panel.add_child(box)
 
 	var title := Label.new()
 	title.text = "Inventaire"
-	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", UI_TITLE)
+	_style_label_title(title, 14, UI_BORDER_SOFT)
 	box.add_child(title)
 
+	box.add_child(_make_gradient_separator())
+
 	for kind in INV_KINDS:
-		var l := Label.new()
-		l.text = "%s : 0" % INV_DISPLAY[kind]
-		l.add_theme_font_size_override("font_size", 14)
-		l.add_theme_color_override("font_color", UI_TEXT)
-		box.add_child(l)
-		_inv_labels[kind] = l
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		box.add_child(row)
+		var name_lbl := Label.new()
+		name_lbl.text = INV_DISPLAY[kind]
+		name_lbl.add_theme_font_size_override("font_size", 13)
+		name_lbl.add_theme_color_override("font_color", UI_SUBTLE)
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_lbl)
+		var val_lbl := Label.new()
+		val_lbl.text = "0"
+		val_lbl.add_theme_font_size_override("font_size", 14)
+		val_lbl.add_theme_color_override("font_color", UI_TITLE)
+		val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(val_lbl)
+		_inv_labels[kind] = val_lbl
 
 func _apply_inventory(inv: Dictionary) -> void:
 	for kind in INV_KINDS:
 		var amount := int(inv.get(kind, 0))
+		var prev := int(_inv_state.get(kind, 0))
 		_inv_state[kind] = amount
 		if _inv_labels.has(kind):
 			var label: Label = _inv_labels[kind]
-			label.text = "%s : %d" % [INV_DISPLAY[kind], amount]
+			label.text = "%d" % amount
+			if amount > prev:
+				var pop_color: Color = KIND_POPUP_COLOR.get(kind, Color(1.6, 1.6, 1.6, 1.0))
+				_pulse_label(label, pop_color * 1.6, 0.35)
 	if _inv_panel_visible:
 		_refresh_inventory_panel()
 
