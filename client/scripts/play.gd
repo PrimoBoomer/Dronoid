@@ -128,17 +128,12 @@ const KIND_POPUP_COLOR := {
 	"ice":     Color(0.85, 0.97, 1.00),
 }
 
-const UI_BG := Color(0.04, 0.06, 0.12, 0.92)
-const UI_BG_SOLID := Color(0.05, 0.07, 0.14, 0.96)
 const UI_BORDER := Color(0.40, 0.65, 1.00, 0.85)
 const UI_BORDER_SOFT := Color(0.30, 0.50, 0.85, 0.45)
 const UI_TITLE := Color(0.88, 0.94, 1.00)
 const UI_TEXT := Color(0.80, 0.88, 0.96)
 const UI_SUBTLE := Color(0.55, 0.72, 0.92)
 const UI_BTN_NORMAL := Color(0.20, 0.40, 0.85, 0.85)
-const UI_BTN_HOVER := Color(0.30, 0.55, 1.00, 0.95)
-const UI_BTN_PRESSED := Color(0.18, 0.35, 0.75, 1.00)
-const UI_BTN_DISABLED := Color(0.15, 0.20, 0.30, 0.85)
 
 const BEAM_BASE_THICKNESS: float = 0.35
 const BEAM_TIP_THICKNESS: float = 0.18
@@ -510,82 +505,12 @@ func _place_ship(spawn: Dictionary, star: Dictionary) -> void:
 	_ship.position = pos
 	_ship.look_at(Vector3.ZERO, Vector3.UP)
 
-func _make_ui_panel_style(corner: int = 10, bg: Color = UI_BG, pad: int = 14, accent_top: bool = false, glow: bool = false) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg
-	s.border_width_left = 1
-	s.border_width_right = 1
-	s.border_width_top = 2 if accent_top else 1
-	s.border_width_bottom = 1
-	s.border_color = UI_BORDER
-	s.corner_radius_top_left = corner
-	s.corner_radius_top_right = corner
-	s.corner_radius_bottom_left = corner
-	s.corner_radius_bottom_right = corner
-	s.content_margin_left = pad
-	s.content_margin_right = pad
-	s.content_margin_top = pad
-	s.content_margin_bottom = pad
-	if glow:
-		s.shadow_color = Color(0.30, 0.55, 1.00, 0.45)
-		s.shadow_size = 22
-		s.shadow_offset = Vector2(0, 4)
-	else:
-		s.shadow_color = Color(0.10, 0.30, 0.65, 0.30)
-		s.shadow_size = 12
-		s.shadow_offset = Vector2(0, 3)
-	return s
-
-func _style_button(btn: Button) -> void:
-	var base := StyleBoxFlat.new()
-	base.bg_color = UI_BTN_NORMAL
-	base.border_width_left = 1
-	base.border_width_right = 1
-	base.border_width_top = 1
-	base.border_width_bottom = 1
-	base.border_color = UI_BORDER
-	base.corner_radius_top_left = 8
-	base.corner_radius_top_right = 8
-	base.corner_radius_bottom_left = 8
-	base.corner_radius_bottom_right = 8
-	base.content_margin_left = 14
-	base.content_margin_right = 14
-	base.content_margin_top = 8
-	base.content_margin_bottom = 8
-	var hover := base.duplicate() as StyleBoxFlat
-	hover.bg_color = UI_BTN_HOVER
-	hover.border_color = Color(0.60, 0.82, 1.00, 1.0)
-	hover.expand_margin_left = 1
-	hover.expand_margin_right = 1
-	hover.expand_margin_top = 1
-	hover.expand_margin_bottom = 1
-	hover.shadow_color = Color(0.30, 0.55, 1.00, 0.55)
-	hover.shadow_size = 10
-	hover.shadow_offset = Vector2(0, 0)
-	var pressed := base.duplicate() as StyleBoxFlat
-	pressed.bg_color = UI_BTN_PRESSED
-	var disabled := base.duplicate() as StyleBoxFlat
-	disabled.bg_color = UI_BTN_DISABLED
-	disabled.border_color = Color(0.30, 0.40, 0.55, 0.45)
-	btn.add_theme_stylebox_override("normal", base)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_stylebox_override("focus", hover)
-	btn.add_theme_stylebox_override("disabled", disabled)
-	btn.add_theme_color_override("font_color", UI_TITLE)
-	btn.add_theme_color_override("font_hover_color", Color.WHITE)
-	btn.add_theme_color_override("font_pressed_color", UI_TITLE)
-	btn.add_theme_color_override("font_disabled_color", Color(0.55, 0.62, 0.75))
-	btn.add_theme_color_override("font_outline_color", UI_BORDER_SOFT)
-	btn.add_theme_constant_override("outline_size", 0)
-	btn.add_theme_font_size_override("font_size", 14)
-	_attach_button_hover_anim(btn)
-
 func _style_label_title(lbl: Label, size: int = 16, accent: Color = UI_BORDER_SOFT) -> void:
-	lbl.add_theme_font_size_override("font_size", size)
-	lbl.add_theme_color_override("font_color", UI_TITLE)
-	lbl.add_theme_color_override("font_outline_color", accent)
-	lbl.add_theme_constant_override("outline_size", 2)
+	lbl.theme_type_variation = &"TitleLabel"
+	if size != 16:
+		lbl.add_theme_font_size_override("font_size", size)
+	if accent != UI_BORDER_SOFT:
+		lbl.add_theme_color_override("font_outline_color", accent)
 
 func _make_gradient_separator(h: int = 1) -> Control:
 	var tex_rect := TextureRect.new()
@@ -667,7 +592,7 @@ func _build_pause_menu() -> void:
 
 	_pause_panel = PanelContainer.new()
 	_pause_panel.custom_minimum_size = Vector2(320, 0)
-	_pause_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(14, UI_BG_SOLID, 22, true, true))
+	_pause_panel.theme_type_variation = &"HeroPanel"
 	center.add_child(_pause_panel)
 	var panel := _pause_panel
 
@@ -686,14 +611,14 @@ func _build_pause_menu() -> void:
 	var resume_btn := Button.new()
 	resume_btn.text = "Reprendre"
 	resume_btn.custom_minimum_size = Vector2(240, 0)
-	_style_button(resume_btn)
+	_attach_button_hover_anim(resume_btn)
 	resume_btn.pressed.connect(_on_resume_pressed)
 	box.add_child(resume_btn)
 
 	var quit_btn := Button.new()
 	quit_btn.text = "Quitter au menu"
 	quit_btn.custom_minimum_size = Vector2(240, 0)
-	_style_button(quit_btn)
+	_attach_button_hover_anim(quit_btn)
 	quit_btn.pressed.connect(_on_quit_to_menu_pressed)
 	box.add_child(quit_btn)
 
@@ -701,7 +626,7 @@ func _build_pause_menu() -> void:
 		var quit_game_btn := Button.new()
 		quit_game_btn.text = "Quitter le jeu"
 		quit_game_btn.custom_minimum_size = Vector2(240, 0)
-		_style_button(quit_game_btn)
+		_attach_button_hover_anim(quit_game_btn)
 		quit_game_btn.pressed.connect(_on_quit_game_pressed)
 		box.add_child(quit_game_btn)
 
@@ -780,6 +705,16 @@ func _capture_mouse(capture: bool) -> void:
 	_captured = capture
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED if capture else Input.MOUSE_MODE_VISIBLE)
 
+func _refresh_mouse_capture() -> void:
+	var should_capture := not _paused \
+		and not _ctx_open \
+		and not _alt_held \
+		and not _inv_panel_visible \
+		and not _drone_view_open \
+		and not _drone_submenu_open
+	if should_capture != _captured:
+		_capture_mouse(should_capture)
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var ke := event as InputEventKey
@@ -842,8 +777,7 @@ func _process(delta: float) -> void:
 	var alt_now := Input.is_key_pressed(KEY_ALT)
 	if alt_now != _alt_held:
 		_alt_held = alt_now
-		if not _paused and not _ctx_open:
-			_capture_mouse(not _alt_held)
+		_refresh_mouse_capture()
 	if _orbit_active and not Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
 		_exit_orbit()
 	if _paused:
@@ -1165,7 +1099,7 @@ func _build_tooltip_ui() -> void:
 	_tooltip_panel.modulate.a = 0.0
 	_tooltip_layer.add_child(_tooltip_panel)
 
-	_tooltip_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(8, UI_BG, 10, true, false))
+	_tooltip_panel.theme_type_variation = &"TooltipPanel"
 
 	_tooltip_label = Label.new()
 	_tooltip_label.add_theme_color_override("font_color", UI_TITLE)
@@ -1353,7 +1287,7 @@ func _build_context_menu() -> void:
 	_ctx_panel = PanelContainer.new()
 	_ctx_panel.visible = false
 	_ctx_layer.add_child(_ctx_panel)
-	_ctx_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG_SOLID, 6))
+	_ctx_panel.theme_type_variation = &"MenuPanel"
 
 	_ctx_vbox = VBoxContainer.new()
 	_ctx_vbox.add_theme_constant_override("separation", 2)
@@ -1398,6 +1332,7 @@ func _open_context_menu(screen_pos: Vector2) -> void:
 func _close_context_menu() -> void:
 	_ctx_open = false
 	_ctx_panel.visible = false
+	_refresh_mouse_capture()
 
 func _on_ctx_navigate() -> void:
 	_close_context_menu()
@@ -1442,7 +1377,7 @@ func _build_inventory_panel() -> void:
 
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(360, 0)
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(12, UI_BG_SOLID, 14, true, true))
+	panel.theme_type_variation = &"ModalPanel"
 	center.add_child(panel)
 	_inv_panel_root = panel
 
@@ -1489,7 +1424,7 @@ func _build_inventory_panel() -> void:
 	box.add_child(drone_box)
 	_inv_drone_btn = Button.new()
 	_inv_drone_btn.text = "Construire un drone"
-	_style_button(_inv_drone_btn)
+	_attach_button_hover_anim(_inv_drone_btn)
 	_inv_drone_btn.add_theme_font_size_override("font_size", 14)
 	_inv_drone_btn.pressed.connect(_on_build_pressed.bind("drone"))
 	drone_box.add_child(_inv_drone_btn)
@@ -1511,14 +1446,14 @@ func _build_inventory_panel() -> void:
 	box.add_child(strat_row1)
 	_inv_order_all_btn = Button.new()
 	_inv_order_all_btn.text = "Distincts"
-	_style_button(_inv_order_all_btn)
+	_attach_button_hover_anim(_inv_order_all_btn)
 	_inv_order_all_btn.add_theme_font_size_override("font_size", 11)
 	_inv_order_all_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inv_order_all_btn.pressed.connect(_on_order_all_pressed.bind("mine_distinct", ""))
 	strat_row1.add_child(_inv_order_all_btn)
 	var spread_btn := Button.new()
 	spread_btn.text = "Répartir par type"
-	_style_button(spread_btn)
+	_attach_button_hover_anim(spread_btn)
 	spread_btn.add_theme_font_size_override("font_size", 11)
 	spread_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spread_btn.pressed.connect(_on_order_all_pressed.bind("spread_kinds", ""))
@@ -1530,7 +1465,7 @@ func _build_inventory_panel() -> void:
 	for kind in INV_KINDS:
 		var k_btn := Button.new()
 		k_btn.text = String(INV_DISPLAY.get(kind, kind))
-		_style_button(k_btn)
+		_attach_button_hover_anim(k_btn)
 		var k_color: Color = KIND_POPUP_COLOR.get(kind, UI_BTN_NORMAL)
 		_tint_button(k_btn, k_color)
 		k_btn.add_theme_font_size_override("font_size", 11)
@@ -1539,7 +1474,7 @@ func _build_inventory_panel() -> void:
 		strat_row2.add_child(k_btn)
 	var cancel_btn := Button.new()
 	cancel_btn.text = "✕"
-	_style_button(cancel_btn)
+	_attach_button_hover_anim(cancel_btn)
 	cancel_btn.add_theme_font_size_override("font_size", 11)
 	cancel_btn.tooltip_text = "Annuler tous les ordres"
 	cancel_btn.pressed.connect(_on_order_all_pressed.bind("idle", ""))
@@ -1562,7 +1497,7 @@ func _build_inventory_panel() -> void:
 	box.add_child(factory_row)
 	_inv_factory_btn = Button.new()
 	_inv_factory_btn.text = "Construire usine"
-	_style_button(_inv_factory_btn)
+	_attach_button_hover_anim(_inv_factory_btn)
 	_inv_factory_btn.add_theme_font_size_override("font_size", 11)
 	_inv_factory_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inv_factory_btn.pressed.connect(_on_build_pressed.bind("factory"))
@@ -1606,7 +1541,7 @@ func _toggle_inventory_panel() -> void:
 	_inv_panel_layer.visible = _inv_panel_visible
 	if _inv_panel_visible:
 		_inv_status_lbl.text = ""
-		_capture_mouse(false)
+		_refresh_mouse_capture()
 		_refresh_inventory_panel()
 		if _inv_panel_root != null:
 			_inv_panel_root.pivot_offset = _inv_panel_root.size * 0.5
@@ -1621,8 +1556,7 @@ func _toggle_inventory_panel() -> void:
 			if dim_node != null:
 				tw.tween_property(dim_node, "color:a", 0.55, 0.16).set_trans(Tween.TRANS_QUAD)
 	else:
-		if not _alt_held and not _ctx_open:
-			_capture_mouse(true)
+		_refresh_mouse_capture()
 
 func _refresh_inventory_panel() -> void:
 	var can_drone := _can_afford(DRONE_COST)
@@ -1732,7 +1666,7 @@ func _build_drone_submenu() -> void:
 	_drone_submenu_layer.visible = false
 	add_child(_drone_submenu_layer)
 	_drone_submenu_panel = PanelContainer.new()
-	_drone_submenu_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG_SOLID, 6))
+	_drone_submenu_panel.theme_type_variation = &"MenuPanel"
 	_drone_submenu_layer.add_child(_drone_submenu_panel)
 	_drone_submenu_vbox = VBoxContainer.new()
 	_drone_submenu_vbox.add_theme_constant_override("separation", 2)
@@ -1769,6 +1703,7 @@ func _close_drone_submenu() -> void:
 	_drone_submenu_drone_id = -1
 	if _drone_submenu_layer != null:
 		_drone_submenu_layer.visible = false
+	_refresh_mouse_capture()
 
 func _on_drone_row_pressed(drone_id: int) -> void:
 	var pos := get_viewport().get_mouse_position()
@@ -1824,7 +1759,7 @@ func _build_drone_view() -> void:
 	_drone_view_panel.offset_left = -340.0
 	_drone_view_panel.offset_right = -16.0
 	_drone_view_panel.offset_top = 16.0
-	_drone_view_panel.add_theme_stylebox_override("panel", _make_ui_panel_style(12, UI_BG_SOLID, 14, true, true))
+	_drone_view_panel.theme_type_variation = &"ModalPanel"
 	_drone_view_layer.add_child(_drone_view_panel)
 
 	var box := VBoxContainer.new()
@@ -1895,7 +1830,7 @@ func _build_drone_view() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "Fermer"
-	_style_button(close_btn)
+	_attach_button_hover_anim(close_btn)
 	close_btn.pressed.connect(_close_drone_view)
 	box.add_child(close_btn)
 
@@ -1915,6 +1850,7 @@ func _close_drone_view() -> void:
 	_drone_view_target_id = -1
 	if _drone_view_layer != null:
 		_drone_view_layer.visible = false
+	_refresh_mouse_capture()
 
 func _update_drone_view() -> void:
 	if not _drone_view_open or _drone_view_target_id < 0:
@@ -1953,7 +1889,7 @@ func _build_cheat_panel() -> void:
 	panel.offset_left = -260.0
 	panel.offset_right = -16.0
 	panel.offset_top = 220.0
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(8, UI_BG, 10))
+	panel.theme_type_variation = &"CompactPanel"
 	_cheat_layer.add_child(panel)
 
 	var box := VBoxContainer.new()
@@ -1983,7 +1919,7 @@ func _build_cheat_panel() -> void:
 
 	var btn := Button.new()
 	btn.text = "+100 chaque matériau"
-	_style_button(btn)
+	_attach_button_hover_anim(btn)
 	btn.add_theme_font_size_override("font_size", 12)
 	btn.pressed.connect(_on_cheat_grant_pressed)
 	box.add_child(btn)
@@ -2397,7 +2333,7 @@ func _build_inputs_hud() -> void:
 	panel.offset_left = 16.0
 	panel.offset_top = -210.0
 	panel.offset_bottom = -16.0
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12, true, false))
+	panel.theme_type_variation = &"HudPanel"
 	layer.add_child(panel)
 
 	var box := VBoxContainer.new()
@@ -2475,7 +2411,7 @@ func _build_inventory_hud() -> void:
 	panel.offset_left = -220.0
 	panel.offset_right = -16.0
 	panel.offset_top = 16.0
-	panel.add_theme_stylebox_override("panel", _make_ui_panel_style(10, UI_BG, 12, true, false))
+	panel.theme_type_variation = &"HudPanel"
 	layer.add_child(panel)
 
 	var box := VBoxContainer.new()

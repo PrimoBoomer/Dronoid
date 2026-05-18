@@ -2,31 +2,22 @@ extends Node
 
 const MUSIC_DIR := "res://assets/music/"
 const VOLUME_DB := -10.0
-const CROSSFADE_S := 1.5
 
-var _player_a: AudioStreamPlayer = null
-var _player_b: AudioStreamPlayer = null
-var _active: AudioStreamPlayer = null
+var _player: AudioStreamPlayer = null
 var _tracks: Array[String] = []
 var _current_idx: int = -1
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	_player_a = _make_player()
-	_player_b = _make_player()
-	_active = _player_a
+	_player = AudioStreamPlayer.new()
+	_player.bus = "Master"
+	_player.volume_db = VOLUME_DB
+	_player.finished.connect(_on_finished)
+	add_child(_player)
 	_scan_tracks()
 	if _tracks.is_empty():
 		return
 	_play_next()
-
-func _make_player() -> AudioStreamPlayer:
-	var p := AudioStreamPlayer.new()
-	p.bus = "Master"
-	p.volume_db = VOLUME_DB
-	p.finished.connect(_on_finished)
-	add_child(p)
-	return p
 
 func _scan_tracks() -> void:
 	var dir := DirAccess.open(MUSIC_DIR)
@@ -55,12 +46,11 @@ func _play_next() -> void:
 		return
 	if stream is AudioStreamOggVorbis:
 		(stream as AudioStreamOggVorbis).loop = false
-	_active.stream = stream
-	_active.play()
+	_player.stream = stream
+	_player.play()
 
 func _on_finished() -> void:
 	_play_next()
 
 func set_volume(db: float) -> void:
-	_player_a.volume_db = db
-	_player_b.volume_db = db
+	_player.volume_db = db
